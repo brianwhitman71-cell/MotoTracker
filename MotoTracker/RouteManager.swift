@@ -352,7 +352,7 @@ class RouteManager: NSObject, ObservableObject {
     @Published var currentHeading: CLLocationDirection = 0
     @Published var simulationSpeedMultiplier: Double = 1.0
     @Published var simulationProgress: Double = 0
-    var isPreviewMode = false
+    @Published var isPreviewMode = false
     private var simulationTask: Task<Void, Never>?
     private var simulationSeekFraction: Double? = nil
     @Published var units: UnitsOfMeasure             = {
@@ -1459,6 +1459,10 @@ class RouteManager: NSObject, ObservableObject {
             if !isPreviewMode { say("Starting navigation. \(first.text)", isNavigation: true) }
         }
         if simulationMode {
+            // Snap camera immediately to the route start so preview always begins at the beginning
+            if let firstCoord = polylineCoords(route.polyline).first {
+                simulatedCoordinate = firstCoord
+            }
             simulationTask = Task { await runSimulation() }
         }
     }

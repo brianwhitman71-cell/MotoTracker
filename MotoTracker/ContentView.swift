@@ -2450,14 +2450,14 @@ struct MapView: UIViewRepresentable {
             let renderer = MKPolylineRenderer(polyline: polyline)
             if let selected = selectedPolyline, polyline === selected {
                 renderer.strokeColor = .systemBlue
-                renderer.lineWidth = 6
+                renderer.lineWidth = 3
             } else if routes.contains(where: { $0.polyline === polyline }) {
                 renderer.strokeColor = .systemGray
-                renderer.lineWidth = 4
+                renderer.lineWidth = 2
                 renderer.alpha = 0.6
             } else {
                 renderer.strokeColor = .systemOrange
-                renderer.lineWidth = 5
+                renderer.lineWidth = 2.5
             }
             return renderer
         }
