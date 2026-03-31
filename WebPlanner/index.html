@@ -437,15 +437,44 @@ function changeCount(delta) {
   document.getElementById('route-count-val').textContent = routeCount;
 }
 
+// ── Recent locations ───────────────────────────────────────────────────────
+function loadRecents() {
+  try { return JSON.parse(localStorage.getItem('moto_recents') || '[]'); } catch(e) { return []; }
+}
+function saveRecent(name, lat, lng) {
+  const h = loadHome();
+  // Don't save home as a recent
+  if (h && Math.abs(h.lat - lat) < 0.0001 && Math.abs(h.lng - lng) < 0.0001) return;
+  let recents = loadRecents();
+  recents = recents.filter(r => !(Math.abs(r.lat - lat) < 0.0001 && Math.abs(r.lng - lng) < 0.0001));
+  recents.unshift({ name, lat, lng });
+  localStorage.setItem('moto_recents', JSON.stringify(recents.slice(0, 12)));
+}
+function showRecents() {
+  const recents = loadRecents();
+  const box = document.getElementById('search-results');
+  if (!recents.length) { box.innerHTML = ''; return; }
+  box.innerHTML = `<div style="padding:6px 12px;font-size:10px;color:#555;text-transform:uppercase;letter-spacing:.07em">Recent</div>`;
+  recents.forEach(r => {
+    const d = document.createElement('div');
+    d.className = 'search-result';
+    d.innerHTML = `<span style="color:#666;margin-right:6px">🕐</span><span style="font-size:13px;color:#ddd">${r.name}</span>`;
+    d.onclick = () => { addStop(r.name, r.lat, r.lng); box.innerHTML = ''; searchInput.value = ''; };
+    box.appendChild(d);
+  });
+}
+
 // ── Geocoding (Stadia Maps / Pelias) ──────────────────────────────────────
 let autocompleteTimer = null;
 
 const searchInput = document.getElementById('search-input');
+searchInput.addEventListener('focus', () => { if (!searchInput.value.trim()) showRecents(); });
+searchInput.addEventListener('blur', () => { setTimeout(() => { document.getElementById('search-results').innerHTML = ''; }, 200); });
 searchInput.addEventListener('keydown', e => { if (e.key === 'Enter') { clearTimeout(autocompleteTimer); doSearch(); } });
 searchInput.addEventListener('input', () => {
   clearTimeout(autocompleteTimer);
   const q = searchInput.value.trim();
-  if (q.length < 3) { document.getElementById('search-results').innerHTML = ''; return; }
+  if (q.length < 3) { showRecents(); return; }
   autocompleteTimer = setTimeout(() => doAutocomplete(q), 300);
 });
 document.getElementById('search-btn').addEventListener('click', () => { clearTimeout(autocompleteTimer); doSearch(); });
@@ -514,6 +543,7 @@ function addStop(name, lat, lng) {
   stops.push({ name, lat, lng });
   const m = L.marker([lat, lng]).addTo(map).bindPopup(name);
   markers.push(m);
+  saveRecent(name, lat, lng);
   renderStops();
   updateSendBtn();
   if (stops.length === 1) map.setView([lat, lng], 12);
