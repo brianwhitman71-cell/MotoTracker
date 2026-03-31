@@ -40,6 +40,9 @@ struct ContentView: View {
     @State private var pickerCollapsed = false
     @State private var showingTripPlanner = false
     @State private var showingCommunityLibrary = false
+    @State private var showingSavedRoutes = false
+    @State private var showingSaveRouteAlert = false
+    @State private var saveRouteName = ""
     @State private var showingPOIFilter        = false
     @State private var selectedPOI: MotoPOI?
     @StateObject private var poiManager = MotoPOIManager.shared
@@ -244,6 +247,28 @@ struct ContentView: View {
             }
         }
         .padding(.horizontal)
+        HStack(spacing: 8) {
+            Button { showingSavedRoutes = true } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "bookmark.fill").font(.subheadline.weight(.semibold))
+                    Text("Saved Routes").font(.subheadline.weight(.semibold))
+                    if !routeManager.savedRoutes.isEmpty {
+                        Text("\(routeManager.savedRoutes.count)")
+                            .font(.caption2.bold())
+                            .padding(.horizontal, 5).padding(.vertical, 2)
+                            .background(Color.orange)
+                            .foregroundStyle(.white)
+                            .clipShape(Capsule())
+                    }
+                }
+                .foregroundStyle(.orange)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(.regularMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+        }
+        .padding(.horizontal)
     }
 
     @ViewBuilder private var bottomPanel: some View {
@@ -263,6 +288,20 @@ struct ContentView: View {
             }
             if !routeManager.routes.isEmpty && !routeManager.isNavigating && !shapingMode {
                 routePickerPanel
+                if routeManager.selectedRoute != nil {
+                    Button {
+                        saveRouteName = ""
+                        showingSaveRouteAlert = true
+                    } label: {
+                        Label("Save Route", systemImage: "bookmark")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.orange)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(.regularMaterial)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                }
             }
             BottomControls(
                 locationManager: locationManager,
@@ -345,6 +384,14 @@ struct ContentView: View {
             .sheet(isPresented: $showingTripPlanner) { TripPlannerView(routeManager: routeManager) }
             .sheet(isPresented: $showingSettings) { SettingsView(routeManager: routeManager, mapViewRef: mapViewRef, currentLocation: locationManager.currentLocation) }
             .sheet(isPresented: $showingCommunityLibrary) { CommunityLibraryView(routeManager: routeManager) }
+            .sheet(isPresented: $showingSavedRoutes) { SavedRoutesView(routeManager: routeManager) }
+            .alert("Save Route", isPresented: $showingSaveRouteAlert) {
+                TextField("Route name", text: $saveRouteName)
+                Button("Save") { routeManager.saveCurrentRoute(name: saveRouteName) }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("Give this route a name to find it later.")
+            }
             .sheet(isPresented: $showingPOIFilter) { MotoPOIFilterView(manager: poiManager) }
             .sheet(item: $selectedPOI) { poi in
                 MotoPOIDetailView(poi: poi) { navPOI in

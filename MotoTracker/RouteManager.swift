@@ -273,6 +273,36 @@ struct GHInstruction {
     let intervalStart: Int  // index into points array where this instruction starts
 }
 
+// MARK: - Saved Route (persisted)
+struct SavedRoute: Codable, Identifiable {
+    var id: UUID = UUID()
+    var name: String
+    var date: Date = Date()
+    var stops: [SavedStop]
+    var options: SavedOptions
+
+    struct SavedStop: Codable {
+        var name: String
+        var latitude: Double
+        var longitude: Double
+    }
+
+    struct SavedOptions: Codable {
+        var curviness: String
+        var avoidFreeways: Bool
+        var avoidMainRoads: Bool
+        var avoidUnpaved: Bool
+        var useHills: Double
+        var routeCount: Int
+    }
+
+    var subtitle: String {
+        guard !stops.isEmpty else { return "No stops" }
+        if stops.count == 1 { return stops[0].name }
+        return "\(stops.first!.name) → \(stops.last!.name)"
+    }
+}
+
 // MARK: - Recent destination (persisted)
 struct RecentDestination: Codable {
     let name: String
@@ -303,8 +333,10 @@ class RouteManager: NSObject, ObservableObject {
     @Published var searchResults: [MKMapItem] = []
     @Published var showingRecents = false
 
-    private static let recentsKey  = "recentDestinations"
-    private static let maxRecents  = 8
+    private static let recentsKey      = "recentDestinations"
+    private static let maxRecents      = 8
+    private static let savedRoutesKey  = "savedRoutes"
+    @Published var savedRoutes: [SavedRoute] = []
 
     // ── Routes ──────────────────────────────────────────────────
     @Published var routes:          [GHRoute] = []
@@ -379,6 +411,7 @@ class RouteManager: NSObject, ObservableObject {
     override init() {
         super.init()
         RouteManager.current = self
+        savedRoutes = loadPersistedSavedRoutes()
     }
 
     // MARK: - Search
@@ -896,9 +929,18 @@ class RouteManager: NSObject, ObservableObject {
     // MARK: - Web Planner Deep Link
 
     struct DeepLinkPayload: Codable {
-        struct Stop: Codable { let n: String; let lat: Double; let lon: Double }
-        struct Opt:  Codable { let c: String; let af: Bool; let am: Bool; let au: Bool; let h: Double; let rc: Int }
-        let v: Int
+        struct Stop: Codable {
+            let n: String
+            // Support both key variants (lat/lon from Swift, la/lo legacy)
+            let lat: Double?; let lon: Double?
+            let la: Double?;  let lo: Double?
+            var latitude:  Double { lat ?? la ?? 0 }
+            var longitude: Double { lon ?? lo ?? 0 }
+        }
+        struct Opt: Codable {
+            let c: String?; let af: Bool?; let am: Bool?; let au: Bool?; let h: Double?; let rc: Int?
+        }
+        let v: Int?
         let stops: [Stop]
         let opt: Opt
     }
@@ -920,22 +962,22 @@ class RouteManager: NSObject, ObservableObject {
 
         let curviness: RouteOptions.Curviness
         switch payload.opt.c {
-        case "straight":  curviness = .straight
-        case "veryCurvy": curviness = .veryCurvy
-        default:          curviness = .curvy
+        case "straight":   curviness = .straight
+        case "very_curvy", "veryCurvy": curviness = .veryCurvy
+        default:           curviness = .curvy
         }
 
         currentOptions = RouteOptions(
             curviness:      curviness,
-            avoidFreeways:  payload.opt.af,
-            avoidMainRoads: payload.opt.am,
-            avoidUnpaved:   payload.opt.au,
-            useHills:       payload.opt.h,
-            routeCount:     payload.opt.rc
+            avoidFreeways:  payload.opt.af ?? false,
+            avoidMainRoads: payload.opt.am ?? false,
+            avoidUnpaved:   payload.opt.au ?? false,
+            useHills:       payload.opt.h  ?? 0.5,
+            routeCount:     payload.opt.rc ?? 3
         )
 
         tripStops = payload.stops.map { s in
-            let coord     = CLLocationCoordinate2D(latitude: s.lat, longitude: s.lon)
+            let coord     = CLLocationCoordinate2D(latitude: s.latitude, longitude: s.longitude)
             let placemark = MKPlacemark(coordinate: coord)
             let item      = MKMapItem(placemark: placemark)
             item.name     = s.n
@@ -943,6 +985,61 @@ class RouteManager: NSObject, ObservableObject {
         }
 
         await calculateTripRoute()
+    }
+
+    // MARK: - Saved Routes
+
+    func saveCurrentRoute(name: String) {
+        guard !tripStops.isEmpty else { return }
+        let stops = tripStops.map {
+            SavedRoute.SavedStop(name: $0.name, latitude: $0.coordinate.latitude, longitude: $0.coordinate.longitude)
+        }
+        let opts = SavedRoute.SavedOptions(
+            curviness:      currentOptions.curviness.rawValue,
+            avoidFreeways:  currentOptions.avoidFreeways,
+            avoidMainRoads: currentOptions.avoidMainRoads,
+            avoidUnpaved:   currentOptions.avoidUnpaved,
+            useHills:       currentOptions.useHills,
+            routeCount:     currentOptions.routeCount
+        )
+        let saved = SavedRoute(name: name.isEmpty ? "My Route" : name, stops: stops, options: opts)
+        savedRoutes.insert(saved, at: 0)
+        persistSavedRoutes()
+    }
+
+    func loadSavedRoute(_ route: SavedRoute) async {
+        tripStops = route.stops.map { s in
+            let coord = CLLocationCoordinate2D(latitude: s.latitude, longitude: s.longitude)
+            let item  = MKMapItem(placemark: MKPlacemark(coordinate: coord))
+            item.name = s.name
+            return TripStop(name: s.name, mapItem: item)
+        }
+        currentOptions = RouteOptions(
+            curviness:      RouteOptions.Curviness(rawValue: route.options.curviness) ?? .curvy,
+            avoidFreeways:  route.options.avoidFreeways,
+            avoidMainRoads: route.options.avoidMainRoads,
+            avoidUnpaved:   route.options.avoidUnpaved,
+            useHills:       route.options.useHills,
+            routeCount:     route.options.routeCount
+        )
+        await calculateTripRoute()
+    }
+
+    func deleteSavedRoute(_ route: SavedRoute) {
+        savedRoutes.removeAll { $0.id == route.id }
+        persistSavedRoutes()
+    }
+
+    private func loadPersistedSavedRoutes() -> [SavedRoute] {
+        guard let data = UserDefaults.standard.data(forKey: Self.savedRoutesKey),
+              let routes = try? JSONDecoder().decode([SavedRoute].self, from: data)
+        else { return [] }
+        return routes
+    }
+
+    private func persistSavedRoutes() {
+        guard let data = try? JSONEncoder().encode(savedRoutes) else { return }
+        UserDefaults.standard.set(data, forKey: Self.savedRoutesKey)
     }
 
     // MARK: - Round Trip Generation

@@ -458,14 +458,15 @@ function sendToPhone() {
   const hills         = parseFloat(document.getElementById('hills-slider').value);
 
   const payload = {
-    stops: stops.map(s => ({ n: s.name, la: s.lat, lo: s.lng })),
+    v: 1,
+    stops: stops.map(s => ({ n: s.name, lat: s.lat, lon: s.lng })),
     opt: {
-      curviness,
-      avoidHighways,
-      avoidTolls,
-      avoidUnpaved,
-      hills,
-      routeCount
+      c:  curviness === 'very_curvy' ? 'veryCurvy' : curviness,
+      af: avoidHighways,
+      am: false,
+      au: avoidUnpaved,
+      h:  hills,
+      rc: routeCount
     }
   };
 
