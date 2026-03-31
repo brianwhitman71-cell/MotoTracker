@@ -3,20 +3,46 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Opening 2Wheel Tracker…</title>
+<title>Open in 2Wheel Tracker</title>
 <style>
-  body { font-family: -apple-system, sans-serif; background: #111; color: #eee; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; text-align: center; gap: 16px; }
-  .icon { font-size: 64px; }
-  h1 { font-size: 22px; font-weight: 600; }
-  p { font-size: 15px; color: #888; max-width: 300px; line-height: 1.5; }
-  a { display: inline-block; margin-top: 8px; padding: 14px 28px; background: #ff6b00; color: #fff; border-radius: 12px; text-decoration: none; font-size: 16px; font-weight: 600; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, sans-serif; background: #111; color: #eee; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 32px 20px; text-align: center; gap: 0; }
+  .icon { font-size: 56px; margin-bottom: 16px; }
+  h1 { font-size: 22px; font-weight: 700; margin-bottom: 10px; }
+  .subtitle { font-size: 15px; color: #888; margin-bottom: 28px; line-height: 1.5; max-width: 300px; }
+  .open-btn { display: inline-block; padding: 16px 40px; background: #ff6b00; color: #fff; border-radius: 14px; text-decoration: none; font-size: 17px; font-weight: 700; margin-bottom: 28px; }
+  .open-btn:active { background: #e55f00; }
+  .divider { width: 100%; max-width: 320px; border: none; border-top: 1px solid #2a2a2a; margin-bottom: 24px; }
+  .steps { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 14px; padding: 20px; max-width: 320px; text-align: left; }
+  .steps-title { font-size: 12px; font-weight: 700; color: #666; text-transform: uppercase; letter-spacing: .07em; margin-bottom: 14px; }
+  .step { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 12px; }
+  .step:last-child { margin-bottom: 0; }
+  .step-num { width: 22px; height: 22px; background: #333; border-radius: 50%; font-size: 11px; font-weight: 700; color: #aaa; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
+  .step p { font-size: 13px; color: #bbb; line-height: 1.4; }
+  .step p b { color: #eee; font-weight: 600; }
 </style>
 </head>
 <body>
 <div class="icon">🏍</div>
-<h1>Opening 2Wheel Tracker</h1>
-<p>Make sure the app is installed on your device.</p>
-<a id="open-link" href="#">Open App</a>
+<h1>Open in 2Wheel Tracker</h1>
+<p class="subtitle">Tap the button below to load your route in the app.</p>
+<a id="open-link" class="open-btn" href="#">Open App</a>
+<hr class="divider">
+<div class="steps">
+  <div class="steps-title">App not opening?</div>
+  <div class="step">
+    <div class="step-num">1</div>
+    <p>Make sure <b>2Wheel Tracker</b> is installed on this device.</p>
+  </div>
+  <div class="step">
+    <div class="step-num">2</div>
+    <p>In Xcode, <b>connect your iPhone</b>, select it as the build target, and press <b>Cmd+R</b> to install.</p>
+  </div>
+  <div class="step">
+    <div class="step-num">3</div>
+    <p>Once installed, tap <b>Open App</b> above — it will launch with your route loaded.</p>
+  </div>
+</div>
 <script>
   const params = new URLSearchParams(window.location.search);
   const d = params.get('d');
