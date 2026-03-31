@@ -4,6 +4,5 @@
 
 enum Secrets {
     static let stadiaMapsKey  = "YOUR_STADIA_MAPS_KEY"
-    static let tomTomKey      = "YOUR_TOMTOM_KEY"
     static let humeAIKey      = "YOUR_HUME_AI_KEY"
 }

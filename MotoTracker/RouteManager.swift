@@ -297,7 +297,6 @@ class RouteManager: NSObject, ObservableObject {
 
     // ── API config ──────────────────────────────────────────────
     private let stadiaApiKey = Secrets.stadiaMapsKey
-    private let tomTomApiKey = Secrets.tomTomKey
 
     // ── Search ──────────────────────────────────────────────────
     @Published var searchQuery    = ""
@@ -1875,11 +1874,8 @@ class RouteManager: NSObject, ObservableObject {
     // MARK: - Live hazard fetching
     private func fetchLiveHazards(for route: GHRoute) async {
         let bbox = routeBoundingBox(route.polyline)
-        async let tomtom  = fetchTomTomIncidents(bbox: bbox)
-        async let cameras = fetchSpeedCameras(bbox: bbox)
-        let results = await tomtom + cameras
-        hazards = results
-        print("Loaded \(hazards.count) live hazard(s)")
+        hazards = await fetchSpeedCameras(bbox: bbox)
+        print("Loaded \(hazards.count) speed camera(s)")
     }
 
     // Bounding box from polyline with padding
@@ -1894,57 +1890,6 @@ class RouteManager: NSObject, ObservableObject {
             maxLat: (lats.max() ?? 0) + pad,
             maxLon: (lons.max() ?? 0) + pad
         )
-    }
-
-    // TomTom Traffic Incidents API — construction, accidents, road closures
-    private func fetchTomTomIncidents(
-        bbox: (minLat: Double, minLon: Double, maxLat: Double, maxLon: Double)
-    ) async -> [RouteHazard] {
-        let fields = "{incidents{type,geometry{coordinates},properties{iconCategory}}}"
-        var comps  = URLComponents(string: "https://api.tomtom.com/traffic/services/5/incidentDetails")!
-        comps.queryItems = [
-            URLQueryItem(name: "bbox",               value: "\(bbox.minLon),\(bbox.minLat),\(bbox.maxLon),\(bbox.maxLat)"),
-            URLQueryItem(name: "fields",             value: fields),
-            URLQueryItem(name: "language",           value: "en-GB"),
-            URLQueryItem(name: "categoryFilter",     value: "1,8,9"),   // 1=accident 8=road closed 9=road works
-            URLQueryItem(name: "timeValidityFilter", value: "present"),
-            URLQueryItem(name: "key",                value: tomTomApiKey),
-        ]
-        guard let url = comps.url else { return [] }
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            let json      = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-            let incidents = json?["incidents"] as? [[String: Any]] ?? []
-            print("TomTom returned \(incidents.count) incident(s)")
-            return incidents.compactMap { incident -> RouteHazard? in
-                guard
-                    let geometry = incident["geometry"] as? [String: Any],
-                    let props    = incident["properties"] as? [String: Any],
-                    let category = props["iconCategory"] as? Int
-                else { return nil }
-
-                // Geometry can be Point [lon,lat] or LineString [[lon,lat],...]
-                let coord: CLLocationCoordinate2D
-                if let pt = geometry["coordinates"] as? [Double], pt.count >= 2 {
-                    coord = CLLocationCoordinate2D(latitude: pt[1], longitude: pt[0])
-                } else if let line = geometry["coordinates"] as? [[Double]],
-                          let mid  = line[safe: line.count / 2], mid.count >= 2 {
-                    coord = CLLocationCoordinate2D(latitude: mid[1], longitude: mid[0])
-                } else { return nil }
-
-                let type: HazardType
-                switch category {
-                case 1:  type = .accident
-                case 8:  type = .roadClosed
-                case 9:  type = .construction
-                default: return nil
-                }
-                return RouteHazard(type: type, coordinate: coord)
-            }
-        } catch {
-            print("TomTom error: \(error)")
-            return []
-        }
     }
 
     // OpenStreetMap Overpass API — community-mapped speed cameras (free, no key)
