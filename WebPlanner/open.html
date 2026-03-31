@@ -21,9 +21,7 @@
   const params = new URLSearchParams(window.location.search);
   const d = params.get('d');
   if (d) {
-    const url = 'mototracker://route?d=' + d;
-    document.getElementById('open-link').href = url;
-    window.location = url;
+    document.getElementById('open-link').href = 'mototracker://route?d=' + d;
   }
 </script>
 </body>
