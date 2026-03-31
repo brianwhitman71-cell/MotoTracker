@@ -1,5 +1,6 @@
 import SwiftUI
 import CoreLocation
+import MapKit
 
 // MARK: - Direction model
 enum RoundTripDirection: String, CaseIterable, Identifiable {
@@ -51,6 +52,17 @@ struct RoundTripView: View {
 
     @State private var distanceMiles: Double = 75
     @State private var direction: RoundTripDirection = .any
+    @State private var options = RouteOptions()
+
+    private func hillLabel(_ v: Double) -> String {
+        switch v {
+        case ..<0.2: return "Avoid hills"
+        case ..<0.4: return "Prefer flat"
+        case ..<0.6: return "Neutral"
+        case ..<0.8: return "Prefer hills"
+        default:     return "Seek hills"
+        }
+    }
 
     // 3×3 compass grid layout
     private let compassGrid: [[RoundTripDirection?]] = [
@@ -121,6 +133,69 @@ struct RoundTripView: View {
                         .frame(maxWidth: .infinity)
                     }
 
+                    // Route Style
+                    OptionsSection(title: "Route Style") {
+                        VStack(spacing: 10) {
+                            HStack(spacing: 10) {
+                                ForEach(RouteOptions.Curviness.allCases) { option in
+                                    CurvinessButton(
+                                        option: option,
+                                        isSelected: options.curviness == option
+                                    ) { options.curviness = option }
+                                }
+                            }
+                            Text(options.curviness.description)
+                                .font(.caption).foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                        }
+                    }
+
+                    // Avoid
+                    OptionsSection(title: "Avoid") {
+                        VStack(spacing: 0) {
+                            ToggleRow(label: "Freeways & Motorways", icon: "road.lanes",             isOn: $options.avoidFreeways)
+                            Divider().padding(.leading, 36)
+                            ToggleRow(label: "Main Roads",           icon: "car.2",                  isOn: $options.avoidMainRoads)
+                            Divider().padding(.leading, 36)
+                            ToggleRow(label: "Unpaved Roads",        icon: "road.lanes.curved.left", isOn: $options.avoidUnpaved)
+                        }
+                    }
+
+                    // Elevation
+                    OptionsSection(title: "Elevation") {
+                        VStack(spacing: 10) {
+                            HStack {
+                                Label("Hill Preference", systemImage: "mountain.2")
+                                    .font(.subheadline)
+                                Spacer()
+                                Text(hillLabel(options.useHills))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            TappableSlider(value: $options.useHills, tint: .green)
+                            HStack {
+                                Text("Flat").font(.caption).foregroundStyle(.secondary)
+                                Spacer()
+                                Text("Hilly").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+
+                    // Results
+                    OptionsSection(title: "Results") {
+                        Stepper(value: $options.routeCount, in: 1...10) {
+                            HStack {
+                                Label("Number of Routes", systemImage: "list.number")
+                                    .font(.subheadline)
+                                Spacer()
+                                Text("\(options.routeCount)")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.blue)
+                                    .frame(minWidth: 24)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+
                     Spacer(minLength: 0)
                 }
                 .padding(.bottom, 100) // room for the sticky button
@@ -135,7 +210,7 @@ struct RoundTripView: View {
             .safeAreaInset(edge: .bottom) {
                 Button {
                     dismiss()
-                    Task { await routeManager.generateRoundTrip(distanceMiles: distanceMiles, direction: direction) }
+                    Task { await routeManager.generateRoundTrip(distanceMiles: distanceMiles, direction: direction, options: options) }
                 } label: {
                     Label("Generate Routes", systemImage: "arrow.triangle.2.circlepath")
                         .font(.subheadline.weight(.semibold))

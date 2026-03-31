@@ -296,8 +296,8 @@ class RouteManager: NSObject, ObservableObject {
     static weak var current: RouteManager?
 
     // ── API config ──────────────────────────────────────────────
-    private let stadiaApiKey = "27e86cad-e90a-4912-8059-4e7010cdfd9b"
-    private let tomTomApiKey = "x3ce3nRnrVYUCwy7BJjrC27CNyHDYlDa"     // TomTom hazards
+    private let stadiaApiKey = Secrets.stadiaMapsKey
+    private let tomTomApiKey = Secrets.tomTomKey
 
     // ── Search ──────────────────────────────────────────────────
     @Published var searchQuery    = ""
@@ -331,6 +331,7 @@ class RouteManager: NSObject, ObservableObject {
     private var curvinessTask: Task<Void, Never>?
     private var lastRoundTripDistance: Double = 75
     private var lastRoundTripDirection: RoundTripDirection = .any
+    private var lastRoundTripOptions: RouteOptions = RouteOptions()
     private var roundTripSeed: Double = 0
 
     // ── Errors ──────────────────────────────────────────────────
@@ -370,7 +371,7 @@ class RouteManager: NSObject, ObservableObject {
     private var announcedTiers: Set<Int> = []  // tier indices announced for current step
     private let synthesizer          = AVSpeechSynthesizer()
     private var humePlayer: AVAudioPlayer?
-    private let humeAPIKey = "A6fW7AsKwXbMYyRRB2FyXwG3az911EPGBGRbnSFY5MGxhACH"
+    private let humeAPIKey = Secrets.humeAIKey
     private var searchTask: Task<Void, Never>?
     private var lastKnownLocation: CLLocation?
     private var hazards: [RouteHazard]   = []
@@ -894,21 +895,23 @@ class RouteManager: NSObject, ObservableObject {
     }
 
     // MARK: - Round Trip Generation
-    func generateRoundTrip(distanceMiles: Double, direction: RoundTripDirection) async {
+    func generateRoundTrip(distanceMiles: Double, direction: RoundTripDirection, options: RouteOptions = RouteOptions()) async {
         lastRoundTripDistance  = distanceMiles
         lastRoundTripDirection = direction
+        lastRoundTripOptions   = options
         roundTripSeed          = 0
-        await fetchRoundTrip(distanceMiles: distanceMiles, direction: direction, seed: 0)
+        await fetchRoundTrip(distanceMiles: distanceMiles, direction: direction, options: options, seed: 0)
     }
 
     func regenerateRoundTrip() async {
         roundTripSeed += 1
         await fetchRoundTrip(distanceMiles: lastRoundTripDistance,
                              direction: lastRoundTripDirection,
+                             options: lastRoundTripOptions,
                              seed: roundTripSeed)
     }
 
-    private func fetchRoundTrip(distanceMiles: Double, direction: RoundTripDirection, seed: Double) async {
+    private func fetchRoundTrip(distanceMiles: Double, direction: RoundTripDirection, options: RouteOptions, seed: Double) async {
         isCalculatingRoutes = true
         isRoundTrip         = true
         routes              = []
@@ -932,7 +935,16 @@ class RouteManager: NSObject, ObservableObject {
         // 5 turning-point variations spread around the chosen direction
         let offsets: [Double] = [0, 40, -40, 80, -80].map { $0 + seed * 19.7 }
 
-        let rtProfile: [String: Any] = ["use_highways": 0.05, "use_trails": 0.35, "use_tolls": 0.3]
+        let rtUseTrails = options.avoidUnpaved ? 0.0 : 0.35
+        let rtHwBias: Double
+        switch options.curviness {
+        case .straight:  rtHwBias = 0.5
+        case .curvy:     rtHwBias = 0.05
+        case .veryCurvy: rtHwBias = 0.0
+        }
+        let rtFinalHw = (options.avoidFreeways || options.avoidMainRoads) ? 0.0 : rtHwBias
+        let rtProfile: [String: Any] = ["use_highways": rtFinalHw, "use_trails": rtUseTrails,
+                                        "use_tolls": 0.3, "use_hills": options.useHills]
 
         var fetched: [GHRoute] = []
         await withTaskGroup(of: [GHRoute].self) { group in
@@ -976,7 +988,7 @@ class RouteManager: NSObject, ObservableObject {
             if !isDup { unique.append(route) }
         }
 
-        routes = Array(unique.prefix(5))
+        routes = Array(unique.prefix(options.routeCount))
         if routes.isEmpty {
             routeError = "Couldn't generate a loop. Try a different distance or direction."
             isRoundTrip = false

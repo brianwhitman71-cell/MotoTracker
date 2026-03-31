@@ -41,7 +41,7 @@ struct SettingsView: View {
                     }
 
                     Toggle(isOn: $routeManager.simulationMode) {
-                        Label("Simulate Driving", systemImage: "figure.outdoor.cycle")
+                        Label("Simulate Driving", systemImage: "figure.motorcycle")
                     }
                     .tint(.orange)
                 }

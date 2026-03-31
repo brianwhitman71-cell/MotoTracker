@@ -2669,7 +2669,7 @@ struct MapControlsView: View {
             }
             Divider().frame(width: 44)
             Button { toggleHeading() } label: {
-                Image(systemName: headingUpMode ? "arrow.up.circle.fill" : "compass")
+                Image(systemName: headingUpMode ? "arrow.up.circle.fill" : "arrow.up.circle")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(headingUpMode ? .orange : .primary)
                     .frame(width: 44, height: 44)
