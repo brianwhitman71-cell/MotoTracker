@@ -75,6 +75,33 @@
   .btn-clear { width: 100%; padding: 9px; border-radius: 9px; border: 1px solid #442222; background: #1e1212; color: #cc4444; font-size: 13px; cursor: pointer; }
   .btn-clear:hover { background: #2a1515; color: #ff5555; }
 
+  /* Home bar */
+  .home-bar { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: #161a1d; border-bottom: 1px solid #2a2a2a; }
+  .home-icon { font-size: 18px; flex-shrink: 0; }
+  .home-info { flex: 1; min-width: 0; }
+  .home-info .home-label { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.07em; }
+  .home-info .home-addr { font-size: 13px; color: #ccc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .home-info .home-unset { font-size: 13px; color: #555; }
+  .btn-home-edit { background: none; border: 1px solid #333; border-radius: 7px; color: #888; font-size: 12px; padding: 4px 10px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+  .btn-home-edit:hover { color: #fff; border-color: #555; }
+
+  /* Home modal */
+  .home-modal { position: fixed; inset: 0; background: #000000bb; display: none; align-items: center; justify-content: center; z-index: 3000; }
+  .home-modal.open { display: flex; }
+  .home-modal-box { background: #1e1e1e; border: 1px solid #333; border-radius: 14px; padding: 22px; width: 320px; }
+  .home-modal-box h3 { font-size: 16px; margin-bottom: 14px; }
+  .home-modal-box input { width: 100%; background: #252525; border: 1px solid #333; border-radius: 8px; padding: 9px 12px; color: #eee; font-size: 14px; outline: none; margin-bottom: 8px; }
+  .home-modal-box input:focus { border-color: #555; }
+  #home-search-results { background: #252525; border-radius: 8px; overflow: hidden; margin-bottom: 10px; }
+  .home-result { padding: 9px 12px; font-size: 13px; cursor: pointer; border-bottom: 1px solid #2e2e2e; line-height: 1.3; }
+  .home-result:last-child { border-bottom: none; }
+  .home-result:hover { background: #2e2e2e; }
+  .home-modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+  .btn-home-cancel { background: #2a2a2a; border: none; border-radius: 8px; color: #aaa; padding: 9px 16px; font-size: 13px; cursor: pointer; }
+  .btn-home-cancel:hover { background: #333; }
+  .btn-home-clear { background: none; border: 1px solid #442222; border-radius: 8px; color: #cc4444; padding: 9px 16px; font-size: 13px; cursor: pointer; }
+  .btn-home-clear:hover { background: #1e1212; }
+
   /* Locate me button */
   .locate-btn { position: absolute; top: 80px; right: 10px; z-index: 500; background: #1a1a1a; border: 1px solid #333; border-radius: 8px; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 16px; color: #ccc; }
   .locate-btn:hover { background: #252525; color: #fff; }
@@ -108,6 +135,16 @@
 
 <div class="app">
   <div id="sidebar">
+
+    <!-- Home bar -->
+    <div class="home-bar">
+      <span class="home-icon">🏠</span>
+      <div class="home-info">
+        <div class="home-label">Home</div>
+        <div id="home-addr-display" class="home-unset">Tap to set your home address</div>
+      </div>
+      <button class="btn-home-edit" onclick="openHomeModal()">Edit</button>
+    </div>
 
     <!-- Search -->
     <div class="section">
@@ -201,6 +238,19 @@
   Route: <b id="ri-dist">—</b> &nbsp;|&nbsp; Est. time: <b id="ri-time">—</b>
 </div>
 
+<!-- Home Modal -->
+<div class="home-modal" id="home-modal">
+  <div class="home-modal-box">
+    <h3>🏠 Set Home Address</h3>
+    <input id="home-search-input" type="text" placeholder="Search your home address…" autocomplete="off"/>
+    <div id="home-search-results"></div>
+    <div class="home-modal-actions">
+      <button class="btn-home-clear" id="home-clear-btn" onclick="clearHome()" style="display:none">Remove</button>
+      <button class="btn-home-cancel" onclick="closeHomeModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <!-- QR Modal -->
 <div class="modal-overlay" id="qr-modal">
   <div class="modal-box">
@@ -224,13 +274,6 @@ L.tileLayer(`https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{
   maxZoom: 20
 }).addTo(map);
 
-if (navigator.geolocation) {
-  navigator.geolocation.getCurrentPosition(
-    pos => map.setView([pos.coords.latitude, pos.coords.longitude], 12),
-    () => {}
-  );
-}
-
 // ── State ──────────────────────────────────────────────────────────────────
 let stops = [];           // { name, lat, lng }
 let markers = [];
@@ -238,6 +281,123 @@ let routeLayer = null;
 let curviness = 'mixed';
 let routeCount = 3;
 let dragSrcIdx = null;
+
+// ── Home ────────────────────────────────────────────────────────────────────
+function loadHome() {
+  try { return JSON.parse(localStorage.getItem('moto_home') || 'null'); } catch(e) { return null; }
+}
+function saveHome(h) {
+  localStorage.setItem('moto_home', JSON.stringify(h));
+  renderHomeBar();
+}
+function renderHomeBar() {
+  const h = loadHome();
+  const el = document.getElementById('home-addr-display');
+  const clearBtn = document.getElementById('home-clear-btn');
+  if (h) {
+    el.textContent = h.name;
+    el.className = 'home-addr';
+    if (clearBtn) clearBtn.style.display = 'inline-block';
+  } else {
+    el.textContent = 'Tap to set your home address';
+    el.className = 'home-unset';
+    if (clearBtn) clearBtn.style.display = 'none';
+  }
+}
+
+let homeSearchTimer = null;
+function openHomeModal() {
+  document.getElementById('home-modal').classList.add('open');
+  const h = loadHome();
+  const input = document.getElementById('home-search-input');
+  input.value = h ? h.name : '';
+  document.getElementById('home-search-results').innerHTML = '';
+  document.getElementById('home-clear-btn').style.display = h ? 'inline-block' : 'none';
+  setTimeout(() => input.focus(), 50);
+}
+function closeHomeModal() {
+  document.getElementById('home-modal').classList.remove('open');
+  document.getElementById('home-search-input').value = '';
+  document.getElementById('home-search-results').innerHTML = '';
+}
+function clearHome() {
+  localStorage.removeItem('moto_home');
+  renderHomeBar();
+  closeHomeModal();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const input = document.getElementById('home-search-input');
+  input.addEventListener('input', () => {
+    clearTimeout(homeSearchTimer);
+    const q = input.value.trim();
+    if (q.length < 3) { document.getElementById('home-search-results').innerHTML = ''; return; }
+    homeSearchTimer = setTimeout(() => doHomeSearch(q), 300);
+  });
+  input.addEventListener('keydown', e => { if (e.key === 'Escape') closeHomeModal(); });
+});
+
+async function doHomeSearch(q) {
+  try {
+    const res = await fetch(`https://api.stadiamaps.com/geocoding/v1/autocomplete?text=${encodeURIComponent(q)}&layers=venue,address,street,locality&api_key=${STADIA_KEY}`);
+    const data = await res.json();
+    const box = document.getElementById('home-search-results');
+    box.innerHTML = '';
+    (data.features || []).slice(0, 5).forEach(f => {
+      const [lon, lat] = f.geometry.coordinates;
+      const label = f.properties.label || f.properties.name || '';
+      const name  = f.properties.name || label.split(',')[0].trim();
+      const sub   = label.includes(',') ? label.slice(label.indexOf(',') + 1).trim() : '';
+      const d = document.createElement('div');
+      d.className = 'home-result';
+      d.innerHTML = `<div style="font-size:13px;color:#ddd">${name}</div>${sub ? `<div style="font-size:11px;color:#666;margin-top:2px">${sub}</div>` : ''}`;
+      d.onclick = () => {
+        saveHome({ name: label, lat, lng: lon });
+        closeHomeModal();
+        // If home is already stop 0, update it
+        if (stops.length > 0 && stops[0].name === (loadHome()?.name || '')) {
+          map.removeLayer(markers[0]); markers.splice(0,1); stops.splice(0,1);
+        }
+        if (stops.length === 0 || stops[0].name !== label) {
+          addHomeAsFirstStop({ name: label, lat, lng: lon });
+        }
+      };
+      box.appendChild(d);
+    });
+  } catch(e) {}
+}
+
+function addHomeAsFirstStop(h) {
+  const m = L.marker([h.lat, h.lng]).addTo(map).bindPopup('🏠 Home');
+  stops.unshift({ name: h.name, lat: h.lat, lng: h.lng });
+  markers.unshift(m);
+  renderStops();
+  updateSendBtn();
+  map.setView([h.lat, h.lng], 12);
+}
+
+// ── Location pin ────────────────────────────────────────────────────────────
+let locationMarker = null;
+const locationIcon = L.icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
+  iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41]
+});
+
+// ── Geolocation on load ─────────────────────────────────────────────────────
+if (navigator.geolocation) {
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      const latlng = [pos.coords.latitude, pos.coords.longitude];
+      // Only pan to current location if no home is set
+      const h = loadHome();
+      if (!h) map.setView(latlng, 12);
+      if (locationMarker) map.removeLayer(locationMarker);
+      locationMarker = L.marker(latlng, { icon: locationIcon }).addTo(map);
+    },
+    () => {}
+  );
+}
 
 // ── Options UI ─────────────────────────────────────────────────────────────
 function toggleOptions() {
@@ -503,16 +663,10 @@ function clearAll() {
   stops = [];
   if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
   document.getElementById('route-info').style.display = 'none';
-  renderStops();
-  updateSendBtn();
+  const h = loadHome();
+  if (h) addHomeAsFirstStop(h);
+  else { renderStops(); updateSendBtn(); }
 }
-
-let locationMarker = null;
-const locationIcon = L.icon({
-  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
-  iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41]
-});
 
 function goToMyLocation() {
   if (!navigator.geolocation) return;
@@ -521,14 +675,16 @@ function goToMyLocation() {
       const latlng = [pos.coords.latitude, pos.coords.longitude];
       map.setView(latlng, 14);
       if (locationMarker) map.removeLayer(locationMarker);
-      locationMarker = L.marker(latlng, { icon: locationIcon })
-        .addTo(map)
-        .bindPopup('You are here')
-        .openPopup();
+      locationMarker = L.marker(latlng, { icon: locationIcon }).addTo(map);
     },
     () => alert('Location access denied.')
   );
 }
+
+// ── Init ────────────────────────────────────────────────────────────────────
+renderHomeBar();
+const _home = loadHome();
+if (_home) addHomeAsFirstStop(_home);
 </script>
 </body>
 </html>
