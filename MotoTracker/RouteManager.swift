@@ -893,6 +893,58 @@ class RouteManager: NSObject, ObservableObject {
         isCalculatingRoutes = false
     }
 
+    // MARK: - Web Planner Deep Link
+
+    struct DeepLinkPayload: Codable {
+        struct Stop: Codable { let n: String; let lat: Double; let lon: Double }
+        struct Opt:  Codable { let c: String; let af: Bool; let am: Bool; let au: Bool; let h: Double; let rc: Int }
+        let v: Int
+        let stops: [Stop]
+        let opt: Opt
+    }
+
+    func handleDeepLink(_ url: URL) async {
+        guard url.scheme == "mototracker",
+              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+              var b64 = items.first(where: { $0.name == "d" })?.value
+        else { return }
+
+        b64 = b64.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        let pad = b64.count % 4
+        if pad > 0 { b64 += String(repeating: "=", count: 4 - pad) }
+
+        guard let data    = Data(base64Encoded: b64),
+              let payload = try? JSONDecoder().decode(DeepLinkPayload.self, from: data),
+              !payload.stops.isEmpty
+        else { return }
+
+        let curviness: RouteOptions.Curviness
+        switch payload.opt.c {
+        case "straight":  curviness = .straight
+        case "veryCurvy": curviness = .veryCurvy
+        default:          curviness = .curvy
+        }
+
+        currentOptions = RouteOptions(
+            curviness:      curviness,
+            avoidFreeways:  payload.opt.af,
+            avoidMainRoads: payload.opt.am,
+            avoidUnpaved:   payload.opt.au,
+            useHills:       payload.opt.h,
+            routeCount:     payload.opt.rc
+        )
+
+        tripStops = payload.stops.map { s in
+            let coord     = CLLocationCoordinate2D(latitude: s.lat, longitude: s.lon)
+            let placemark = MKPlacemark(coordinate: coord)
+            let item      = MKMapItem(placemark: placemark)
+            item.name     = s.n
+            return TripStop(name: s.n, mapItem: item)
+        }
+
+        await calculateTripRoute()
+    }
+
     // MARK: - Round Trip Generation
     func generateRoundTrip(distanceMiles: Double, direction: RoundTripDirection, options: RouteOptions = RouteOptions()) async {
         lastRoundTripDistance  = distanceMiles

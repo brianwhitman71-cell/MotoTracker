@@ -321,6 +321,10 @@ struct ContentView: View {
             .fileImporter(isPresented: $showingGPXImport, allowedContentTypes: [.xml], allowsMultipleSelection: false) { result in
                 handleGPXImport(result)
             }
+            .onReceive(NotificationCenter.default.publisher(for: .motoDeepLink)) { notif in
+                guard let url = notif.object as? URL else { return }
+                Task { await routeManager.handleDeepLink(url) }
+            }
     }
 
     private func saveAlertMessage(for ride: Ride) -> String {
