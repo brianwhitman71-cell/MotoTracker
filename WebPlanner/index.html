@@ -78,7 +78,10 @@
   .btn-shape:hover { background: #221535; }
   .btn-shape.active { background: #7c3aed; border-color: #7c3aed; color: #fff; }
   .shaping-banner { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 600; background: #7c3aedee; color: #fff; padding: 8px 18px; border-radius: 20px; font-size: 13px; font-weight: 500; pointer-events: none; display: none; white-space: nowrap; }
-  .via-marker-icon { width: 14px; height: 14px; background: #a78bfa; border: 2px solid #fff; border-radius: 50%; cursor: grab; box-shadow: 0 1px 4px #0006; }
+  .via-marker-icon { width: 22px; height: 22px; background: #7c3aed; border: 2px solid #fff; border-radius: 50%; cursor: grab; box-shadow: 0 1px 6px #0008; display: flex; align-items: center; justify-content: center; transition: background 0.15s; }
+  .via-marker-icon .via-x { display: none; color: #fff; font-size: 12px; font-weight: 700; line-height: 1; pointer-events: none; }
+  .via-marker-icon:hover { background: #dc2626; cursor: pointer; }
+  .via-marker-icon:hover .via-x { display: block; }
 
   /* Home bar */
   .home-bar { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: #161a1d; border-bottom: 1px solid #2a2a2a; }
@@ -672,9 +675,10 @@ function decodePolyline6(encoded) {
 // ── Route Shaping ─────────────────────────────────────────────────────────
 const viaIcon = L.divIcon({
   className: '',
-  html: '<div class="via-marker-icon"></div>',
-  iconSize: [14, 14],
-  iconAnchor: [7, 7]
+  html: '<div class="via-marker-icon"><span class="via-x">✕</span></div>',
+  iconSize: [22, 22],
+  iconAnchor: [11, 11],
+  tooltipAnchor: [0, -12]
 });
 
 function toggleShaping() {
@@ -691,7 +695,9 @@ function toggleShaping() {
 function addViaPoint(lat, lng) {
   const segIdx = nearestSegment(lat, lng);
   const snapped = snapToRoute(lat, lng);
-  const marker = L.marker([snapped.lat, snapped.lng], { icon: viaIcon, draggable: true, zIndexOffset: 100 }).addTo(map);
+  const marker = L.marker([snapped.lat, snapped.lng], { icon: viaIcon, draggable: true, zIndexOffset: 100 })
+    .addTo(map)
+    .bindTooltip('Drag to adjust · Click to remove', { direction: 'top', offset: [0, -8] });
   const via = { lat: snapped.lat, lng: snapped.lng, segIdx, marker };
   viaPoints.push(via);
 
@@ -703,7 +709,7 @@ function addViaPoint(lat, lng) {
     shapeDebounce = setTimeout(() => previewRoute(false), 400);
   });
   marker.on('click', e => {
-    L.DomEvent.stopPropagation(e);
+    L.DomEvent.stop(e);
     map.removeLayer(marker);
     viaPoints.splice(viaPoints.indexOf(via), 1);
     previewRoute(false);
