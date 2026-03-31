@@ -472,7 +472,7 @@ function sendToPhone() {
   const json = JSON.stringify(payload);
   const b64 = btoa(unescape(encodeURIComponent(json)))
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-  const url = `mototracker://route?d=${b64}`;
+  const url = `https://brianwhitman71-cell.github.io/MotoTracker/WebPlanner/open.html?d=${b64}`;
 
   document.getElementById('deep-link-display').textContent = url.slice(0, 120) + (url.length > 120 ? '…' : '');
 

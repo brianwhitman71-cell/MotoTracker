@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Opening 2Wheel Tracker…</title>
+<style>
+  body { font-family: -apple-system, sans-serif; background: #111; color: #eee; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; text-align: center; gap: 16px; }
+  .icon { font-size: 64px; }
+  h1 { font-size: 22px; font-weight: 600; }
+  p { font-size: 15px; color: #888; max-width: 300px; line-height: 1.5; }
+  a { display: inline-block; margin-top: 8px; padding: 14px 28px; background: #ff6b00; color: #fff; border-radius: 12px; text-decoration: none; font-size: 16px; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="icon">🏍</div>
+<h1>Opening 2Wheel Tracker</h1>
+<p>Make sure the app is installed on your device.</p>
+<a id="open-link" href="#">Open App</a>
+<script>
+  const params = new URLSearchParams(window.location.search);
+  const d = params.get('d');
+  if (d) {
+    const url = 'mototracker://route?d=' + d;
+    document.getElementById('open-link').href = url;
+    window.location = url;
+  }
+</script>
+</body>
+</html>
