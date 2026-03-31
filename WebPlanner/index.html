@@ -507,11 +507,24 @@ function clearAll() {
   updateSendBtn();
 }
 
+let locationMarker = null;
+const locationIcon = L.icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
+  iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41]
+});
+
 function goToMyLocation() {
   if (!navigator.geolocation) return;
   navigator.geolocation.getCurrentPosition(
     pos => {
-      map.setView([pos.coords.latitude, pos.coords.longitude], 14);
+      const latlng = [pos.coords.latitude, pos.coords.longitude];
+      map.setView(latlng, 14);
+      if (locationMarker) map.removeLayer(locationMarker);
+      locationMarker = L.marker(latlng, { icon: locationIcon })
+        .addTo(map)
+        .bindPopup('You are here')
+        .openPopup();
     },
     () => alert('Location access denied.')
   );
