@@ -74,6 +74,11 @@
   .btn-send:disabled { background: #4a3020; color: #7a5030; cursor: not-allowed; }
   .btn-clear { width: 100%; padding: 9px; border-radius: 9px; border: 1px solid #442222; background: #1e1212; color: #cc4444; font-size: 13px; cursor: pointer; }
   .btn-clear:hover { background: #2a1515; color: #ff5555; }
+  .btn-shape { flex: 1; padding: 11px; border-radius: 9px; border: 1px solid #7c3aed; background: #1a1228; color: #a78bfa; font-size: 14px; cursor: pointer; display: none; }
+  .btn-shape:hover { background: #221535; }
+  .btn-shape.active { background: #7c3aed; border-color: #7c3aed; color: #fff; }
+  .shaping-banner { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 600; background: #7c3aedee; color: #fff; padding: 8px 18px; border-radius: 20px; font-size: 13px; font-weight: 500; pointer-events: none; display: none; white-space: nowrap; }
+  .via-marker-icon { width: 14px; height: 14px; background: #a78bfa; border: 2px solid #fff; border-radius: 50%; cursor: grab; box-shadow: 0 1px 4px #0006; }
 
   /* Home bar */
   .home-bar { display: flex; align-items: center; gap: 10px; padding: 10px 16px; background: #161a1d; border-bottom: 1px solid #2a2a2a; }
@@ -223,6 +228,7 @@
     <div class="actions">
       <button class="btn-preview" onclick="previewRoute()">🗺 Preview Route</button>
       <button class="btn-send" id="send-btn" onclick="sendToPhone()" disabled>📱 Send to Phone</button>
+      <button class="btn-shape" id="shape-btn" onclick="toggleShaping()">✏️ Shape Route</button>
       <button class="btn-clear" onclick="clearAll()">✕ Clear Route &amp; Stops</button>
     </div>
 
@@ -230,6 +236,7 @@
 
   <div id="map" style="position:relative;">
     <button class="locate-btn" onclick="goToMyLocation()" title="Go to my location">📍</button>
+    <div class="shaping-banner" id="shaping-banner">✏️ Click anywhere on the map to add a shaping point — drag points to adjust</div>
   </div>
 </div>
 
@@ -278,9 +285,12 @@ L.tileLayer(`https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{
 let stops = [];           // { name, lat, lng }
 let markers = [];
 let routeLayer = null;
+let routeCoords = [];     // decoded polyline coords from last preview
 let curviness = 'mixed';
 let routeCount = 3;
 let dragSrcIdx = null;
+let shapingMode = false;
+let viaPoints = [];       // { lat, lng, segIdx, marker }
 
 // ── Home ────────────────────────────────────────────────────────────────────
 function loadHome() {
@@ -479,9 +489,13 @@ function showResults(features) {
   });
 }
 
-// ── Map click → reverse geocode ────────────────────────────────────────────
+// ── Map click → reverse geocode or via-point ───────────────────────────────
 map.on('click', async e => {
   const { lat, lng } = e.latlng;
+  if (shapingMode) {
+    addViaPoint(lat, lng);
+    return;
+  }
   let name = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
   try {
     const r = await fetch(`https://api.stadiamaps.com/geocoding/v1/reverse?point.lat=${lat}&point.lon=${lng}&api_key=${STADIA_KEY}`);
@@ -551,7 +565,44 @@ function updateSendBtn() {
 // ── Route preview (Valhalla/Stadia) ────────────────────────────────────────
 const CURV_MAP = { straight: 0, mixed: 0.5, curvy: 0.8, very_curvy: 1.0 };
 
-async function previewRoute() {
+function buildLocations() {
+  const locs = [];
+  for (let i = 0; i < stops.length; i++) {
+    locs.push({ lon: stops[i].lng, lat: stops[i].lat, type: 'break' });
+    // Insert any via-points belonging to this segment, in insertion order
+    viaPoints.filter(v => v.segIdx === i).forEach(v => {
+      locs.push({ lon: v.lng, lat: v.lat, type: 'through' });
+    });
+  }
+  return locs;
+}
+
+// Returns index of the stop-segment (0 = between stop[0] and stop[1]) nearest to lat/lng
+function nearestSegment(lat, lng) {
+  if (stops.length < 2) return 0;
+  let best = 0, bestD = Infinity;
+  for (let i = 0; i < stops.length - 1; i++) {
+    const midLat = (stops[i].lat + stops[i+1].lat) / 2;
+    const midLng = (stops[i].lng + stops[i+1].lng) / 2;
+    const d = Math.hypot(lat - midLat, lng - midLng);
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return best;
+}
+
+// Snap lat/lng to nearest point on the decoded route polyline
+function snapToRoute(lat, lng) {
+  if (!routeCoords.length) return { lat, lng };
+  let best = routeCoords[0], bestD = Infinity;
+  for (const c of routeCoords) {
+    const d = Math.hypot(lat - c[0], lng - c[1]);
+    if (d < bestD) { bestD = d; best = c; }
+  }
+  return { lat: best[0], lng: best[1] };
+}
+
+let shapeDebounce = null;
+async function previewRoute(fitBounds = true) {
   if (stops.length < 2) { alert('Add at least 2 stops to preview a route.'); return; }
   if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
 
@@ -562,7 +613,7 @@ async function previewRoute() {
   const hw            = CURV_MAP[curviness] ?? 0.5;
 
   const body = {
-    locations: stops.map(s => ({ lon: s.lng, lat: s.lat, type: 'break' })),
+    locations: buildLocations(),
     costing: 'motorcycle',
     costing_options: {
       motorcycle: {
@@ -572,7 +623,7 @@ async function previewRoute() {
         use_hills:    hills
       }
     },
-    alternates: Math.max(0, routeCount - 1),
+    alternates: viaPoints.length > 0 ? 0 : Math.max(0, routeCount - 1),
     directions_options: { units: 'miles' }
   };
 
@@ -586,9 +637,9 @@ async function previewRoute() {
     const data = await res.json();
     const trip = data.trip || (data.alternates && data.alternates[0]?.trip) || data;
     const legs = trip.legs || [];
-    const coords = legs.flatMap(leg => decodePolyline6(leg.shape));
-    routeLayer = L.polyline(coords, { color: '#ff6b00', weight: 4, opacity: 0.85 }).addTo(map);
-    map.fitBounds(routeLayer.getBounds(), { padding: [40, 40] });
+    routeCoords = legs.flatMap(leg => decodePolyline6(leg.shape));
+    routeLayer = L.polyline(routeCoords, { color: '#ff6b00', weight: 4, opacity: 0.85 }).addTo(map);
+    if (fitBounds) map.fitBounds(routeLayer.getBounds(), { padding: [40, 40] });
 
     const distMi = (trip.summary?.length || 0).toFixed(1);
     const timeSec = trip.summary?.time || 0;
@@ -596,9 +647,10 @@ async function previewRoute() {
     document.getElementById('ri-dist').textContent = `${distMi} mi`;
     document.getElementById('ri-time').textContent = timeStr;
     document.getElementById('route-info').style.display = 'block';
+    document.getElementById('shape-btn').style.display = 'block';
   } catch(err) {
     console.error(err);
-    alert('Could not fetch route. Check your stops and try again.');
+    if (!shapingMode) alert('Could not fetch route. Check your stops and try again.');
   }
 }
 
@@ -615,6 +667,55 @@ function decodePolyline6(encoded) {
     coords.push([lat / 1e6, lng / 1e6]);
   }
   return coords;
+}
+
+// ── Route Shaping ─────────────────────────────────────────────────────────
+const viaIcon = L.divIcon({
+  className: '',
+  html: '<div class="via-marker-icon"></div>',
+  iconSize: [14, 14],
+  iconAnchor: [7, 7]
+});
+
+function toggleShaping() {
+  if (!routeLayer) { alert('Preview a route first, then use Shape Route to adjust it.'); return; }
+  shapingMode = !shapingMode;
+  const btn = document.getElementById('shape-btn');
+  const banner = document.getElementById('shaping-banner');
+  btn.classList.toggle('active', shapingMode);
+  btn.textContent = shapingMode ? '✓ Done Shaping' : '✏️ Shape Route';
+  banner.style.display = shapingMode ? 'block' : 'none';
+  map.getContainer().style.cursor = shapingMode ? 'crosshair' : '';
+}
+
+function addViaPoint(lat, lng) {
+  const segIdx = nearestSegment(lat, lng);
+  const snapped = snapToRoute(lat, lng);
+  const marker = L.marker([snapped.lat, snapped.lng], { icon: viaIcon, draggable: true, zIndexOffset: 100 }).addTo(map);
+  const via = { lat: snapped.lat, lng: snapped.lng, segIdx, marker };
+  viaPoints.push(via);
+
+  marker.on('drag', e => {
+    via.lat = e.latlng.lat;
+    via.lng = e.latlng.lng;
+    via.segIdx = nearestSegment(via.lat, via.lng);
+    clearTimeout(shapeDebounce);
+    shapeDebounce = setTimeout(() => previewRoute(false), 400);
+  });
+  marker.on('click', e => {
+    L.DomEvent.stopPropagation(e);
+    map.removeLayer(marker);
+    viaPoints.splice(viaPoints.indexOf(via), 1);
+    previewRoute(false);
+  });
+
+  clearTimeout(shapeDebounce);
+  shapeDebounce = setTimeout(() => previewRoute(false), 200);
+}
+
+function clearViaPoints() {
+  viaPoints.forEach(v => map.removeLayer(v.marker));
+  viaPoints = [];
 }
 
 // ── Deep link + QR ────────────────────────────────────────────────────────
@@ -658,11 +759,15 @@ function closeModal() {
 }
 
 function clearAll() {
+  if (shapingMode) toggleShaping();
+  clearViaPoints();
   markers.forEach(m => map.removeLayer(m));
   markers = [];
   stops = [];
+  routeCoords = [];
   if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
   document.getElementById('route-info').style.display = 'none';
+  document.getElementById('shape-btn').style.display = 'none';
   const h = loadHome();
   if (h) addHomeAsFirstStop(h);
   else { renderStops(); updateSendBtn(); }
