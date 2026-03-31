@@ -46,6 +46,7 @@ struct ContentView: View {
     @State private var showCurvinessOverlay = false
     @State private var showingSettings = false
     @State private var mapViewRef: MKMapView?
+    @State private var selectedMapLayer: MapLayerStyle = .standard
     @State private var headingUpMode: Bool = false
     @State private var navAltitude: Double = 1200
     @State private var navTargetAltitude: Double = 1200
@@ -466,7 +467,8 @@ struct ContentView: View {
             },
             onMapCreated: { mapViewRef = $0 },
             onPOISelected: { poi in selectedPOI = poi },
-            isShapingMode: { shapingMode }
+            isShapingMode: { shapingMode },
+            mapLayer: selectedMapLayer
         )
         .ignoresSafeArea()
     }
@@ -497,6 +499,7 @@ struct ContentView: View {
             curvinessToggle
             mapLeftControls
             navRightControls
+            MapLayerButton(selectedLayer: $selectedMapLayer, isNavigating: routeManager.isNavigating)
             if !routeManager.isNavigating {
                 MotoPOIMapButton(manager: poiManager) { showingPOIFilter = true }
             }
@@ -1980,6 +1983,97 @@ class LiveTrackRenderer: MKOverlayRenderer {
 // Keep for any legacy references — no longer used for live track
 class LiveTrackPolyline: MKPolyline {}
 
+// MARK: - Map Layer Style
+
+enum MapLayerStyle: String, CaseIterable, Equatable {
+    case standard        = "Standard"
+    case muted           = "Muted"
+    case satellite       = "Satellite"
+    case hybrid          = "Hybrid"
+    case trafficStandard = "Traffic"
+    case trafficHybrid   = "Satellite + Traffic"
+
+    var icon: String {
+        switch self {
+        case .standard:        return "map"
+        case .muted:           return "map.fill"
+        case .satellite:       return "globe.americas.fill"
+        case .hybrid:          return "globe.americas"
+        case .trafficStandard: return "car.fill"
+        case .trafficHybrid:   return "car.circle.fill"
+        }
+    }
+
+    var configuration: MKMapConfiguration {
+        switch self {
+        case .standard:
+            return MKStandardMapConfiguration(elevationStyle: .realistic)
+        case .muted:
+            let cfg = MKStandardMapConfiguration(elevationStyle: .flat)
+            cfg.emphasisStyle = .muted
+            return cfg
+        case .satellite:
+            return MKImageryMapConfiguration(elevationStyle: .realistic)
+        case .hybrid:
+            return MKHybridMapConfiguration(elevationStyle: .realistic)
+        case .trafficStandard:
+            let cfg = MKStandardMapConfiguration(elevationStyle: .realistic)
+            cfg.showsTraffic = true
+            return cfg
+        case .trafficHybrid:
+            let cfg = MKHybridMapConfiguration(elevationStyle: .realistic)
+            cfg.showsTraffic = true
+            return cfg
+        }
+    }
+}
+
+// MARK: - Map Layer Button
+
+struct MapLayerButton: View {
+    @Binding var selectedLayer: MapLayerStyle
+    var isNavigating: Bool
+    @State private var showingPicker = false
+
+    var body: some View {
+        if isNavigating {
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    Button { showingPicker = true } label: {
+                        Image(systemName: "square.3.layers.3d")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .frame(width: 48, height: 48)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Circle())
+                            .shadow(radius: 3, y: 1)
+                    }
+                    .confirmationDialog("Map Layer", isPresented: $showingPicker) {
+                        ForEach(MapLayerStyle.allCases, id: \.self) { layer in
+                            Button {
+                                selectedLayer = layer
+                            } label: {
+                                Label(layer.rawValue, systemImage: layer.icon)
+                            }
+                            .disabled(selectedLayer == layer)
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("Current: \(selectedLayer.rawValue)")
+                    }
+                    .padding(.trailing, 14)
+                }
+                .padding(.bottom, 180)
+            }
+            .ignoresSafeArea(edges: .bottom)
+            .transition(.scale.combined(with: .opacity))
+            .animation(.spring(duration: 0.3), value: isNavigating)
+        }
+    }
+}
+
 struct MapView: UIViewRepresentable {
     var trackingCoordinates: [CLLocationCoordinate2D]
     var routes: [GHRoute]
@@ -1999,6 +2093,7 @@ struct MapView: UIViewRepresentable {
     var onMapCreated: ((MKMapView) -> Void)?
     var onPOISelected: ((MotoPOI) -> Void)?
     var isShapingMode: (() -> Bool)?       // live closure passed from ContentView @State
+    var mapLayer: MapLayerStyle = .standard
 
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView()
@@ -2017,6 +2112,12 @@ struct MapView: UIViewRepresentable {
     }
 
     func updateUIView(_ map: MKMapView, context: Context) {
+        // Apply map layer configuration only when it changes to avoid flicker
+        if context.coordinator.lastMapLayer != mapLayer {
+            context.coordinator.lastMapLayer = mapLayer
+            map.preferredConfiguration = mapLayer.configuration
+        }
+
         context.coordinator.routes = routes
         context.coordinator.selectedPolyline = selectedRoute?.polyline
         context.coordinator.onRouteSelected = onRouteSelected
@@ -2186,6 +2287,7 @@ struct MapView: UIViewRepresentable {
         var liveTrackRenderer: LiveTrackRenderer?
         var lastRoutePolylineIDs: [ObjectIdentifier] = []
         var lastSelectedPolylineID: ObjectIdentifier?
+        var lastMapLayer: MapLayerStyle = .standard
 
         // Allow our tap to fire alongside MKMapView's own recognizers (label taps, etc.)
         // so the shaping-mode tap always reaches handleTap regardless of map state.
