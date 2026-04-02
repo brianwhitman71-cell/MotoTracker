@@ -110,6 +110,11 @@
   .btn-home-clear { background: none; border: 1px solid #442222; border-radius: 8px; color: #cc4444; padding: 9px 16px; font-size: 13px; cursor: pointer; }
   .btn-home-clear:hover { background: #1e1212; }
 
+  /* Round Trip direction compass */
+  .rt-dir-btn { padding: 6px 2px; border-radius: 6px; border: 1px solid #333; background: #222; color: #aaa; font-size: 11px; font-weight: 600; cursor: pointer; text-align: center; }
+  .rt-dir-btn.active { background: #ff6b00; border-color: #ff6b00; color: #fff; }
+  .rt-dir-btn:hover:not(.active) { background: #2e2e2e; }
+
   /* Saved Routes */
   .sr-token-row { display: flex; gap: 8px; margin-top: 8px; }
   .sr-token-row input { flex: 1; background: #252525; border: 1px solid #333; border-radius: 8px; padding: 8px 10px; color: #eee; font-size: 12px; outline: none; font-family: 'SF Mono', monospace; }
@@ -270,6 +275,35 @@
             <button class="count-btn" onclick="changeCount(-1)">−</button>
             <span id="route-count-val">3</span>
             <button class="count-btn" onclick="changeCount(1)">+</button>
+          </div>
+        </div>
+
+        <div class="opt-group" style="border-top:1px solid #2a2a2a;padding-top:14px;margin-top:4px">
+          <div class="opt-label" style="display:flex;align-items:center;justify-content:space-between">
+            <span>Round Trip</span>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#aaa;text-transform:none;letter-spacing:0">
+              <input type="checkbox" id="round-trip-toggle" style="width:20px;height:20px;cursor:pointer;accent-color:#ff6b00" onchange="toggleRoundTrip()">
+              Enable
+            </label>
+          </div>
+          <div id="round-trip-options" style="display:none;margin-top:12px">
+            <div class="hint" style="margin-bottom:10px">Uses your first stop as the starting point and loops back.</div>
+            <div class="slider-row" style="margin-bottom:14px">
+              <label>Distance: <span id="rt-dist-label">75 mi</span></label>
+              <input type="range" id="rt-distance" min="25" max="300" step="5" value="75" oninput="document.getElementById('rt-dist-label').textContent=this.value+' mi'">
+            </div>
+            <div class="opt-label" style="margin-bottom:8px">Direction</div>
+            <div id="rt-compass" style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;max-width:150px">
+              <button class="rt-dir-btn" data-dir="NW" onclick="setRTDir(this)">NW</button>
+              <button class="rt-dir-btn active" data-dir="Any" onclick="setRTDir(this)">Any</button>
+              <button class="rt-dir-btn" data-dir="NE" onclick="setRTDir(this)">NE</button>
+              <button class="rt-dir-btn" data-dir="W"  onclick="setRTDir(this)">W</button>
+              <button class="rt-dir-btn" data-dir="N"  onclick="setRTDir(this)">N</button>
+              <button class="rt-dir-btn" data-dir="E"  onclick="setRTDir(this)">E</button>
+              <button class="rt-dir-btn" data-dir="SW" onclick="setRTDir(this)">SW</button>
+              <button class="rt-dir-btn" data-dir="S"  onclick="setRTDir(this)">S</button>
+              <button class="rt-dir-btn" data-dir="SE" onclick="setRTDir(this)">SE</button>
+            </div>
           </div>
         </div>
 
@@ -642,8 +676,59 @@ function moveStop(from, to) {
 }
 
 function updateSendBtn() {
-  document.getElementById('send-btn').disabled = stops.length < 2;
+  const ready = isRoundTrip() ? stops.length >= 1 : stops.length >= 2;
+  document.getElementById('send-btn').disabled = !ready;
   updateSaveRouteBtn();
+}
+
+// ── Round Trip ───────────────────────────────────────────────────────────────
+
+let rtDirection = 'Any';
+
+function toggleRoundTrip() {
+  const on = document.getElementById('round-trip-toggle').checked;
+  document.getElementById('round-trip-options').style.display = on ? 'block' : 'none';
+  updateSendBtn();
+}
+
+function setRTDir(btn) {
+  document.querySelectorAll('.rt-dir-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  rtDirection = btn.dataset.dir;
+}
+
+function isRoundTrip() {
+  return document.getElementById('round-trip-toggle')?.checked;
+}
+
+function rtDistanceMiles() {
+  return parseFloat(document.getElementById('rt-distance')?.value || 75);
+}
+
+// Calculate a turning-point lat/lng given an origin, distance, and bearing
+function calcTurningPoint(lat, lng, totalMiles, bearingDeg) {
+  // Half total distance, adjusted for curvy roads (~1.8x crow-flies)
+  const km = (totalMiles / 2) * 1.60934 / 1.8;
+  const R  = 6371;
+  const d  = km / R;
+  const φ1 = lat * Math.PI / 180;
+  const λ1 = lng * Math.PI / 180;
+  const θ  = bearingDeg * Math.PI / 180;
+  const φ2 = Math.asin(Math.sin(φ1)*Math.cos(d) + Math.cos(φ1)*Math.sin(d)*Math.cos(θ));
+  const λ2 = λ1 + Math.atan2(Math.sin(θ)*Math.sin(d)*Math.cos(φ1), Math.cos(d)-Math.sin(φ1)*Math.sin(φ2));
+  return { lat: φ2 * 180/Math.PI, lng: λ2 * 180/Math.PI };
+}
+
+const DIR_BEARINGS = { Any: null, N: 0, NE: 45, E: 90, SE: 135, S: 180, SW: 225, W: 270, NW: 315 };
+
+function buildRoundTripLocations(origin) {
+  const bearing = DIR_BEARINGS[rtDirection] ?? (Math.random() * 360);
+  const tp = calcTurningPoint(origin.lat, origin.lng, rtDistanceMiles(), bearing);
+  return [
+    { lon: origin.lng, lat: origin.lat, type: 'break' },
+    { lon: tp.lng,     lat: tp.lat,     type: 'break' },
+    { lon: origin.lng, lat: origin.lat, type: 'break' }
+  ];
 }
 
 // ── Route preview (Valhalla/Stadia) ────────────────────────────────────────
@@ -687,7 +772,9 @@ function snapToRoute(lat, lng) {
 
 let shapeDebounce = null;
 async function previewRoute(fitBounds = true) {
-  if (stops.length < 2) { alert('Add at least 2 stops to preview a route.'); return; }
+  const needsRT = isRoundTrip();
+  if (needsRT && stops.length < 1) { alert('Add at least 1 stop as your round trip starting point.'); return; }
+  if (!needsRT && stops.length < 2) { alert('Add at least 2 stops to preview a route.'); return; }
   if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
 
   const avoidHighways = document.getElementById('avoid-highways').checked;
@@ -697,7 +784,7 @@ async function previewRoute(fitBounds = true) {
   const hw            = CURV_MAP[curviness] ?? 0.5;
 
   const body = {
-    locations: buildLocations(),
+    locations: needsRT ? buildRoundTripLocations(stops[0]) : buildLocations(),
     costing: 'motorcycle',
     costing_options: {
       motorcycle: {
@@ -807,16 +894,31 @@ function clearViaPoints() {
 
 // ── Deep link + QR ────────────────────────────────────────────────────────
 function sendToPhone() {
-  if (stops.length < 2) return;
+  const needsRT = isRoundTrip();
+  if (needsRT && stops.length < 1) return;
+  if (!needsRT && stops.length < 2) return;
 
   const avoidHighways = document.getElementById('avoid-highways').checked;
   const avoidTolls    = document.getElementById('avoid-tolls').checked;
   const avoidUnpaved  = document.getElementById('avoid-unpaved').checked;
   const hills         = parseFloat(document.getElementById('hills-slider').value);
 
+  let sendStops;
+  if (needsRT) {
+    const bearing = DIR_BEARINGS[rtDirection] ?? (Math.random() * 360);
+    const tp = calcTurningPoint(stops[0].lat, stops[0].lng, rtDistanceMiles(), bearing);
+    sendStops = [
+      { n: stops[0].name, lat: stops[0].lat, lon: stops[0].lng },
+      { n: 'Turning Point', lat: tp.lat, lon: tp.lng },
+      { n: stops[0].name, lat: stops[0].lat, lon: stops[0].lng }
+    ];
+  } else {
+    sendStops = stops.map(s => ({ n: s.name, lat: s.lat, lon: s.lng }));
+  }
+
   const payload = {
     v: 1,
-    stops: stops.map(s => ({ n: s.name, lat: s.lat, lon: s.lng })),
+    stops: sendStops,
     opt: {
       c:  curviness === 'very_curvy' ? 'veryCurvy' : curviness,
       af: avoidHighways,
@@ -958,7 +1060,10 @@ async function pushRoutes() {
 
 function saveRoute() {
   if (!getGHToken() || stops.length < 1) return;
-  const defaultName = stops.map(s => s.name.split(',')[0]).join(' → ');
+  const needsRT = isRoundTrip();
+  const defaultName = needsRT
+    ? `Round Trip ~${rtDistanceMiles()} mi`
+    : stops.map(s => s.name.split(',')[0]).join(' → ');
   const name = prompt('Route name:', defaultName);
   if (!name) return;
 
@@ -966,19 +1071,38 @@ function saveRoute() {
              : curviness === 'straight'    ? 'Straight'
              : curviness.charAt(0).toUpperCase() + curviness.slice(1);
 
+  let routeStops, rtDistMiles = null, rtDir = null;
+  if (needsRT) {
+    const bearing = DIR_BEARINGS[rtDirection] ?? 0;
+    const tp = calcTurningPoint(stops[0].lat, stops[0].lng, rtDistanceMiles(), bearing);
+    routeStops = [
+      { name: stops[0].name, latitude: stops[0].lat, longitude: stops[0].lng },
+      { name: 'Turning Point', latitude: tp.lat, longitude: tp.lng },
+      { name: stops[0].name, latitude: stops[0].lat, longitude: stops[0].lng }
+    ];
+    rtDistMiles = rtDistanceMiles();
+    rtDir = rtDirection;
+  } else {
+    routeStops = stops.map(s => ({ name: s.name, latitude: s.lat, longitude: s.lng }));
+  }
+
+  const options = {
+    curviness:      curv,
+    avoidFreeways:  document.getElementById('avoid-highways').checked,
+    avoidMainRoads: false,
+    avoidUnpaved:   document.getElementById('avoid-unpaved').checked,
+    useHills:       parseFloat(document.getElementById('hills-slider').value),
+    routeCount:     routeCount
+  };
+  if (rtDistMiles !== null) options.roundTripDistanceMiles = rtDistMiles;
+  if (rtDir       !== null) options.roundTripDirection = rtDir;
+
   const route = {
-    id:    crypto.randomUUID(),
-    name:  name,
-    date:  new Date().toISOString(),
-    stops: stops.map(s => ({ name: s.name, latitude: s.lat, longitude: s.lng })),
-    options: {
-      curviness:      curv,
-      avoidFreeways:  document.getElementById('avoid-highways').checked,
-      avoidMainRoads: false,
-      avoidUnpaved:   document.getElementById('avoid-unpaved').checked,
-      useHills:       parseFloat(document.getElementById('hills-slider').value),
-      routeCount:     routeCount
-    }
+    id:      crypto.randomUUID(),
+    name:    name,
+    date:    new Date().toISOString(),
+    stops:   routeStops,
+    options: options
   };
 
   savedRoutes.unshift(route);
