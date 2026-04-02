@@ -537,9 +537,8 @@ class RouteManager: NSObject, ObservableObject {
         let sha    = remoteSHA
         Task {
             do {
-                try await RouteSyncService.uploadRoutes(routes, sha: sha)
-                // Refresh SHA after upload
-                if let (_, newSHA) = try? await RouteSyncService.fetchRoutes() {
+                // uploadRoutes returns the new SHA directly from the response
+                if let newSHA = try await RouteSyncService.uploadRoutes(routes, sha: sha) {
                     remoteSHA = newSHA
                 }
             } catch {

@@ -1,7 +1,8 @@
 import Foundation
 
-// Syncs saved routes to/from a JSON file in the GitHub repo.
-// Both the iOS app and the web planner read/write the same file.
+// Syncs saved routes to/from a JSON file in the public MotoTracker GitHub repo.
+// Reading uses the GitHub Contents API without auth (public repo, no caching).
+// Writing uses the API with the stored token.
 // Conflict resolution: merge by UUID, keep route with more recent date.
 
 enum RouteSyncService {
@@ -9,8 +10,7 @@ enum RouteSyncService {
     private static let repoOwner = "brianwhitman71-cell"
     private static let repoName  = "MotoTracker"
     private static let filePath  = "sync/routes.json"
-    // Raw URL is publicly readable without auth (public repo)
-    private static let rawURL    = "https://raw.githubusercontent.com/brianwhitman71-cell/MotoTracker/main/sync/routes.json"
+    private static let apiURL    = "https://api.github.com/repos/brianwhitman71-cell/MotoTracker/contents/sync/routes.json"
 
     private struct SyncPayload: Codable {
         let schemaVersion: Int
@@ -30,51 +30,43 @@ enum RouteSyncService {
 
     // MARK: - Fetch
 
-    /// Fetches routes from the public raw URL (no auth required).
-    /// Also fetches the file SHA via the API so uploads can update the file.
+    /// Reads routes from GitHub Contents API — no auth needed for public repo.
+    /// Also returns the file SHA needed for subsequent writes.
     static func fetchRoutes() async throws -> (routes: [SavedRoute], sha: String?) {
-        // Read content from raw URL — no token needed, works for all users
-        guard let url = URL(string: rawURL) else { throw URLError(.badURL) }
+        guard let url = URL(string: apiURL) else { throw URLError(.badURL) }
+
         var req = URLRequest(url: url)
-        req.cachePolicy = .reloadIgnoringLocalCacheData
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.timeoutInterval = 15
 
         let (data, response) = try await URLSession.shared.data(for: req)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+
         if http.statusCode == 404 { return ([], nil) }
         guard (200...299).contains(http.statusCode) else { throw URLError(.badServerResponse) }
 
-        let payload = try iso8601Decoder.decode(SyncPayload.self, from: data)
+        guard
+            let json    = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let sha     = json["sha"] as? String,
+            let encoded = json["content"] as? String
+        else { throw URLError(.cannotParseResponse) }
 
-        // Fetch SHA separately (needed for writes) — best-effort, authenticated
-        let sha = await fetchSHA()
+        let clean = encoded.replacingOccurrences(of: "\n", with: "")
+        guard let decoded = Data(base64Encoded: clean) else { throw URLError(.cannotDecodeContentData) }
+
+        let payload = try iso8601Decoder.decode(SyncPayload.self, from: decoded)
         return (payload.routes, sha)
-    }
-
-    /// Fetches only the file SHA from the GitHub API (needed to update an existing file).
-    static func fetchSHA() async -> String? {
-        let urlString = "https://api.github.com/repos/\(repoOwner)/\(repoName)/contents/\(filePath)"
-        guard let url = URL(string: urlString) else { return nil }
-        var req = URLRequest(url: url)
-        req.setValue("Bearer \(Secrets.githubBugToken)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        req.timeoutInterval = 10
-        guard let (data, _) = try? await URLSession.shared.data(for: req),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        return json["sha"] as? String
     }
 
     // MARK: - Upload
 
-    /// Uploads the full routes list to GitHub.
-    /// Pass the SHA returned by fetchRoutes to update an existing file.
-    static func uploadRoutes(_ routes: [SavedRoute], sha: String?) async throws {
+    /// Uploads the full routes list. Returns the new file SHA on success.
+    @discardableResult
+    static func uploadRoutes(_ routes: [SavedRoute], sha: String?) async throws -> String? {
         let payload  = SyncPayload(schemaVersion: 1, routes: routes)
         let jsonData = try iso8601Encoder.encode(payload)
 
-        let urlString = "https://api.github.com/repos/\(repoOwner)/\(repoName)/contents/\(filePath)"
-        guard let url = URL(string: urlString) else { throw URLError(.badURL) }
+        guard let url = URL(string: apiURL) else { throw URLError(.badURL) }
 
         var body: [String: Any] = [
             "message": "Sync routes",
@@ -90,17 +82,22 @@ enum RouteSyncService {
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         req.timeoutInterval = 20
 
-        let (_, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await URLSession.shared.data(for: req)
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
             throw URLError(.badServerResponse)
         }
+
+        // Extract new SHA from response so caller can update without a round-trip
+        let json    = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let content = json?["content"] as? [String: Any]
+        return content?["sha"] as? String
     }
 
     // MARK: - Merge
 
     /// Merges local and remote route lists.
-    /// - Same UUID: keep the one with the more recent date.
-    /// - Unique UUID: include it in the result.
+    /// Same UUID → keep the one with the more recent date.
+    /// Unique UUID → include it.
     static func merge(local: [SavedRoute], remote: [SavedRoute]) -> [SavedRoute] {
         var byID: [UUID: SavedRoute] = [:]
         for r in local  { byID[r.id] = r }

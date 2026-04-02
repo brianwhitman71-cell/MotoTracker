@@ -885,10 +885,8 @@ function goToMyLocation() {
 
 // ── Saved Routes Sync ────────────────────────────────────────────────────────
 
-const GH_TOKEN_KEY  = 'moto_gh_token';
-const GH_SYNC_REPO  = 'brianwhitman71-cell/MotoTracker';
-const GH_SYNC_PATH  = 'sync/routes.json';
-const GH_RAW_URL    = 'https://raw.githubusercontent.com/brianwhitman71-cell/MotoTracker/main/sync/routes.json';
+const GH_TOKEN_KEY = 'moto_gh_token';
+const GH_API_URL   = 'https://api.github.com/repos/brianwhitman71-cell/MotoTracker/contents/sync/routes.json';
 
 let savedRoutes = [];
 let syncSHA     = null;
@@ -901,7 +899,6 @@ function saveGHToken() {
   if (!val) return;
   storeGHToken(val);
   renderSavedRoutesSection();
-  fetchSHA();
 }
 
 function changeGHToken() {
@@ -922,28 +919,19 @@ function updateSaveRouteBtn() {
   if (btn) btn.style.display = (getGHToken() && stops.length >= 1) ? 'block' : 'none';
 }
 
-// Fetch routes from public raw URL — no token needed
+// Read via GitHub Contents API — no auth needed for public repo, no CDN caching
 async function syncRoutes() {
   try {
-    const r = await fetch(GH_RAW_URL + '?t=' + Date.now()); // cache-bust
-    if (r.status === 404) { savedRoutes = []; renderSavedRoutesList(); return; }
-    if (!r.ok) return;
-    const payload = await r.json();
-    savedRoutes = (payload.routes || []).sort((a,b) => new Date(b.date) - new Date(a.date));
-    renderSavedRoutesList();
-  } catch(e) { /* best-effort */ }
-}
-
-// Fetch SHA separately (needed to write) — requires token
-async function fetchSHA() {
-  const token = getGHToken();
-  if (!token) return;
-  const url = `https://api.github.com/repos/${GH_SYNC_REPO}/contents/${GH_SYNC_PATH}`;
-  try {
-    const r = await fetch(url, { headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/vnd.github+json' } });
+    const r = await fetch(GH_API_URL, { headers: { 'Accept': 'application/vnd.github+json' } });
+    if (r.status === 404) { savedRoutes = []; syncSHA = null; renderSavedRoutesList(); return; }
     if (!r.ok) return;
     const json = await r.json();
     syncSHA = json.sha || null;
+    const clean   = (json.content || '').replace(/\n/g, '');
+    const decoded = decodeURIComponent(escape(atob(clean)));
+    const payload = JSON.parse(decoded);
+    savedRoutes = (payload.routes || []).sort((a,b) => new Date(b.date) - new Date(a.date));
+    renderSavedRoutesList();
   } catch(e) { /* best-effort */ }
 }
 
@@ -1078,8 +1066,7 @@ renderHomeBar();
 const _home = loadHome();
 if (_home) addHomeAsFirstStop(_home);
 renderSavedRoutesSection();
-syncRoutes(); // always fetch — public raw URL, no token needed
-if (getGHToken()) fetchSHA();
+syncRoutes();
 </script>
 </body>
 </html>
