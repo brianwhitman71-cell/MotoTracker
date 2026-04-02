@@ -985,6 +985,10 @@ function goToMyLocation() {
   );
 }
 
+function escHtml(str) {
+  return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
 // ── Saved Routes Sync ────────────────────────────────────────────────────────
 
 const GH_TOKEN_KEY = 'moto_gh_token';
