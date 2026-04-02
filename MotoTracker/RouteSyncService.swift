@@ -7,8 +7,10 @@ import Foundation
 enum RouteSyncService {
 
     private static let repoOwner = "brianwhitman71-cell"
-    private static let repoName  = "mototracker-bugs"
+    private static let repoName  = "MotoTracker"
     private static let filePath  = "sync/routes.json"
+    // Raw URL is publicly readable without auth (public repo)
+    private static let rawURL    = "https://raw.githubusercontent.com/brianwhitman71-cell/MotoTracker/main/sync/routes.json"
 
     private struct SyncPayload: Codable {
         let schemaVersion: Int
@@ -28,34 +30,39 @@ enum RouteSyncService {
 
     // MARK: - Fetch
 
-    /// Returns the routes stored on GitHub and the file SHA (needed for updates).
+    /// Fetches routes from the public raw URL (no auth required).
+    /// Also fetches the file SHA via the API so uploads can update the file.
     static func fetchRoutes() async throws -> (routes: [SavedRoute], sha: String?) {
-        let urlString = "https://api.github.com/repos/\(repoOwner)/\(repoName)/contents/\(filePath)"
-        guard let url = URL(string: urlString) else { throw URLError(.badURL) }
-
+        // Read content from raw URL — no token needed, works for all users
+        guard let url = URL(string: rawURL) else { throw URLError(.badURL) }
         var req = URLRequest(url: url)
-        req.setValue("Bearer \(Secrets.githubBugToken)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.cachePolicy = .reloadIgnoringLocalCacheData
         req.timeoutInterval = 15
 
         let (data, response) = try await URLSession.shared.data(for: req)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-
         if http.statusCode == 404 { return ([], nil) }
         guard (200...299).contains(http.statusCode) else { throw URLError(.badServerResponse) }
 
-        guard
-            let json    = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let sha     = json["sha"] as? String,
-            let encoded = json["content"] as? String
-        else { throw URLError(.cannotParseResponse) }
+        let payload = try iso8601Decoder.decode(SyncPayload.self, from: data)
 
-        // GitHub wraps base64 content in newlines
-        let clean   = encoded.replacingOccurrences(of: "\n", with: "")
-        guard let decoded = Data(base64Encoded: clean) else { throw URLError(.cannotDecodeContentData) }
-
-        let payload = try iso8601Decoder.decode(SyncPayload.self, from: decoded)
+        // Fetch SHA separately (needed for writes) — best-effort, authenticated
+        let sha = await fetchSHA()
         return (payload.routes, sha)
+    }
+
+    /// Fetches only the file SHA from the GitHub API (needed to update an existing file).
+    static func fetchSHA() async -> String? {
+        let urlString = "https://api.github.com/repos/\(repoOwner)/\(repoName)/contents/\(filePath)"
+        guard let url = URL(string: urlString) else { return nil }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(Secrets.githubBugToken)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.timeoutInterval = 10
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return json["sha"] as? String
     }
 
     // MARK: - Upload
