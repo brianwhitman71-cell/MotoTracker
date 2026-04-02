@@ -135,25 +135,27 @@ struct VoiceOption: Identifiable, Equatable, Hashable {
 
 // MARK: - Hazard types
 enum HazardType: Equatable {
-    case police, speedCamera, construction, schoolZone, accident, roadClosed
+    case police, speedCamera, redLightCamera, construction, schoolZone, accident, roadClosed
     var announcement: String {
         switch self {
-        case .police:       return "Police reported ahead"
-        case .speedCamera:  return "Speed camera ahead"
-        case .construction: return "Construction zone ahead"
-        case .schoolZone:   return "School zone ahead"
-        case .accident:     return "Accident ahead"
-        case .roadClosed:   return "Road closed ahead"
+        case .police:          return "Police reported ahead"
+        case .speedCamera:     return "Speed camera ahead"
+        case .redLightCamera:  return "Red light camera ahead"
+        case .construction:    return "Construction zone ahead"
+        case .schoolZone:      return "School zone ahead"
+        case .accident:        return "Accident ahead"
+        case .roadClosed:      return "Road closed ahead"
         }
     }
     var icon: String {
         switch self {
-        case .police:       return "shield.fill"
-        case .speedCamera:  return "camera.fill"
-        case .construction: return "exclamationmark.triangle.fill"
-        case .schoolZone:   return "figure.walk"
-        case .accident:     return "car.2.fill"
-        case .roadClosed:   return "xmark.circle.fill"
+        case .police:          return "shield.fill"
+        case .speedCamera:     return "camera.fill"
+        case .redLightCamera:  return "light.beacon.max.fill"
+        case .construction:    return "exclamationmark.triangle.fill"
+        case .schoolZone:      return "figure.walk"
+        case .accident:        return "car.2.fill"
+        case .roadClosed:      return "xmark.circle.fill"
         }
     }
 }
@@ -228,6 +230,50 @@ class CurvinessPolyline: MKPolyline {
     var curvinessScore: Double = 0
 }
 
+// MARK: - Surface Quality Polyline
+
+enum RoadSurface: Int {
+    case smooth    = 0   // asphalt, concrete, paved
+    case moderate  = 1   // compacted, fine_gravel, brick
+    case rough     = 2   // cobblestone, sett, paving_stones
+    case unpaved   = 3   // gravel, dirt, grass, ground, mud, sand
+
+    init(tag: String) {
+        switch tag.lowercased() {
+        case "asphalt", "concrete", "paved", "bituminous":
+            self = .smooth
+        case "compacted", "fine_gravel", "brick", "paving_stones":
+            self = .moderate
+        case "cobblestone", "sett", "unhewn_cobblestone":
+            self = .rough
+        default:
+            self = .unpaved
+        }
+    }
+
+    var color: UIColor {
+        switch self {
+        case .smooth:   return UIColor.systemGreen.withAlphaComponent(0.8)
+        case .moderate: return UIColor.systemYellow.withAlphaComponent(0.8)
+        case .rough:    return UIColor.systemOrange.withAlphaComponent(0.85)
+        case .unpaved:  return UIColor.systemRed.withAlphaComponent(0.9)
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .smooth:   return "Smooth"
+        case .moderate: return "Moderate"
+        case .rough:    return "Rough"
+        case .unpaved:  return "Unpaved"
+        }
+    }
+}
+
+class SurfacePolyline: MKPolyline {
+    var surface: RoadSurface = .smooth
+}
+
 // MARK: - GraphHopper / Kurviger route model
 struct GHRoute {
     let polyline: MKPolyline
@@ -271,6 +317,43 @@ struct GHInstruction {
     let distanceMeters: Double
     let sign: Int  // direction sign: -2=left, 2=right, 0=straight, 4=arrive, etc.
     let intervalStart: Int  // index into points array where this instruction starts
+    var streetNames: [String] = []
+    var isToll: Bool = false
+    var isHighway: Bool = false
+    var isUnpaved: Bool = false
+}
+
+struct RouteConflictItem: Identifiable {
+    let id = UUID()
+    let optionName: String
+    let icon: String
+    let roads: [String]
+}
+
+extension GHRoute {
+    func conflictingItems(with options: RouteOptions) -> [RouteConflictItem] {
+        var items: [RouteConflictItem] = []
+
+        func roadNames(where predicate: (GHInstruction) -> Bool) -> [String] {
+            let names = instructions.filter(predicate).flatMap { $0.streetNames }.filter { !$0.isEmpty }
+            return Array(Set(names)).sorted()
+        }
+
+        if options.avoidFreeways {
+            let roads = roadNames { $0.isHighway }
+            if !roads.isEmpty { items.append(RouteConflictItem(optionName: "Avoid Freeways & Motorways", icon: "road.lanes", roads: roads)) }
+        }
+        if options.avoidTolls {
+            let roads = roadNames { $0.isToll }
+            if !roads.isEmpty { items.append(RouteConflictItem(optionName: "Avoid Toll Roads", icon: "creditcard", roads: roads)) }
+        }
+        if options.avoidUnpaved {
+            let roads = roadNames { $0.isUnpaved }
+            if !roads.isEmpty { items.append(RouteConflictItem(optionName: "Avoid Unpaved Roads", icon: "road.lanes.curved.left", roads: roads)) }
+        }
+
+        return items
+    }
 }
 
 // MARK: - Saved Route (persisted)
@@ -294,6 +377,9 @@ struct SavedRoute: Codable, Identifiable {
         var avoidUnpaved: Bool
         var useHills: Double
         var routeCount: Int
+        // Round-trip extras (nil = not a round trip)
+        var roundTripDistanceMiles: Double? = nil
+        var roundTripDirection: String? = nil
     }
 
     var subtitle: String {
@@ -342,16 +428,21 @@ class RouteManager: NSObject, ObservableObject {
     @Published var routes:          [GHRoute] = []
     @Published var selectedRoute:   GHRoute?
     @Published var isCalculatingRoutes = false
+    @Published var didLoadSavedRoute   = false
+    @Published var activeSavedRouteID: UUID? = nil   // ID of the saved route currently loaded
     @Published var isSearching      = false
     @Published var currentOptions:  RouteOptions = RouteOptions()
     @Published var waypoints:       [CLLocationCoordinate2D] = []
     @Published var isRoundTrip:     Bool = false
     @Published var segmentCurviness: [RouteOptions.Curviness] = []
     @Published var tripStops:       [TripStop] = []
+    @Published var navigationStopIndex: Int = 0   // which tripStop we're currently heading toward
     @Published var routeWeathers:      [UUID: RouteWeather] = [:]
     @Published var isRerouting         = false
     @Published var curvinessOverlays:  [CurvinessPolyline] = []
     @Published var isFetchingCurviness = false
+    @Published var surfaceOverlays:    [SurfacePolyline] = []
+    @Published var isFetchingSurface   = false
     private(set) var currentDestination: MKMapItem?
 
     var userCoordinate: CLLocationCoordinate2D? { lastKnownLocation?.coordinate }
@@ -360,6 +451,8 @@ class RouteManager: NSObject, ObservableObject {
     private var lastRerouteTime: Date = .distantPast
     private var lastCurvinessRegion: MKCoordinateRegion?
     private var curvinessTask: Task<Void, Never>?
+    private var lastSurfaceRegion: MKCoordinateRegion?
+    private var surfaceTask: Task<Void, Never>?
     private var lastRoundTripDistance: Double = 75
     private var lastRoundTripDirection: RoundTripDirection = .any
     private var lastRoundTripOptions: RouteOptions = RouteOptions()
@@ -374,7 +467,7 @@ class RouteManager: NSObject, ObservableObject {
     @Published var distanceToNextTurn: Double = 0
     @Published var nextTurnCoordinate: CLLocationCoordinate2D? = nil
     @Published var voiceMode: VoiceMode              = .soundOn
-    @Published var directionFrequency: DirectionFrequency = .normal
+    @Published var directionFrequency: DirectionFrequency = .frequent
     @Published var selectedVoice: VoiceOption        = VoiceOption.defaults.first { $0.id == "dolly" } ?? VoiceOption.defaults[0]
     @Published var simulationMode: Bool              = UserDefaults.standard.bool(forKey: "simulationMode") {
         didSet { UserDefaults.standard.set(simulationMode, forKey: "simulationMode") }
@@ -397,6 +490,7 @@ class RouteManager: NSObject, ObservableObject {
     @Published var activeHazard: RouteHazard?
     @Published var liveTrackCoords: [CLLocationCoordinate2D] = []
     @Published var currentSpeedLimit: Int? = nil
+    @Published var isOverSpeedLimit: Bool  = false
 
     @Published var currentStepIndex = 0
     private var announcedTiers: Set<Int> = []  // tier indices announced for current step
@@ -407,11 +501,51 @@ class RouteManager: NSObject, ObservableObject {
     private var lastKnownLocation: CLLocation?
     private var hazards: [RouteHazard]   = []
     private var lastSpeedLimitLocation: CLLocation?
+    private var lastGPSUpdateTime: Date  = .distantPast
+    private var deadReckoningTimer: Timer?
+
+    @Published var isInTunnel = false           // GPS signal lost during navigation
+    @Published var deadReckoningCoord: CLLocationCoordinate2D? = nil   // estimated position
 
     override init() {
         super.init()
         RouteManager.current = self
         savedRoutes = loadPersistedSavedRoutes()
+        Task { await pullRemoteRoutes() }
+    }
+
+    // MARK: - GitHub Sync
+
+    private var remoteSHA: String? = nil
+
+    private func pullRemoteRoutes() async {
+        do {
+            let (remote, sha) = try await RouteSyncService.fetchRoutes()
+            remoteSHA = sha
+            let merged = RouteSyncService.merge(local: savedRoutes, remote: remote)
+            if merged.map(\.id) != savedRoutes.map(\.id) {
+                await MainActor.run { savedRoutes = merged }
+                persistSavedRoutes()
+            }
+        } catch {
+            // Sync is best-effort; failures are silent
+        }
+    }
+
+    private func pushRemoteRoutes() {
+        let routes = savedRoutes
+        let sha    = remoteSHA
+        Task {
+            do {
+                try await RouteSyncService.uploadRoutes(routes, sha: sha)
+                // Refresh SHA after upload
+                if let (_, newSHA) = try? await RouteSyncService.fetchRoutes() {
+                    remoteSHA = newSHA
+                }
+            } catch {
+                // Best-effort
+            }
+        }
     }
 
     // MARK: - Search
@@ -632,6 +766,7 @@ class RouteManager: NSObject, ObservableObject {
         routes         = []
         selectedRoute  = nil
         routeError     = nil
+        activeSavedRouteID = nil
         currentOptions = options
 
         guard let userLocation = await getCurrentLocation() else {
@@ -642,8 +777,12 @@ class RouteManager: NSObject, ObservableObject {
 
         let start: [String: Any] = ["lon": userLocation.coordinate.longitude,         "lat": userLocation.coordinate.latitude,                        "type": "break"]
         let end:   [String: Any] = ["lon": destination.location.coordinate.longitude, "lat": destination.location.coordinate.latitude, "type": "break"]
-        let useTrails = options.avoidUnpaved ? 0.0 : 0.4
-        let hillBias  = options.useHills
+        let useTrails: Double
+        if options.preferDirt      { useTrails = 0.9 }
+        else if options.avoidUnpaved { useTrails = 0.0 }
+        else                        { useTrails = 0.4 }
+        let hillBias   = options.useHills
+        let tollBias   = options.avoidTolls ? 0.0 : 0.5
 
         let primaryBias:   Double
         let secondaryBias: Double
@@ -655,10 +794,10 @@ class RouteManager: NSObject, ObservableObject {
         let finalPrimary   = options.avoidFreeways || options.avoidMainRoads ? 0.0 : primaryBias
         let finalSecondary = options.avoidFreeways || options.avoidMainRoads ? 0.0 : secondaryBias
 
-        let primaryProfile:    [String: Any] = ["use_highways": finalPrimary,   "use_trails": useTrails,                "use_tolls": 0.5, "use_hills": hillBias]
-        let secondaryProfile:  [String: Any] = ["use_highways": finalSecondary, "use_trails": min(useTrails + 0.2, 1.0), "use_tolls": 0.0, "use_hills": hillBias]
-        let tertiaryProfile:   [String: Any] = ["use_highways": 1.0,            "use_trails": 0.0,                      "use_tolls": 1.0, "use_hills": 0.5]
-        let quaternaryProfile: [String: Any] = ["use_highways": 0.0,            "use_trails": min(useTrails + 0.4, 1.0), "use_tolls": 0.0, "use_hills": hillBias]
+        let primaryProfile:    [String: Any] = ["use_highways": finalPrimary,   "use_trails": useTrails,                 "use_tolls": tollBias, "use_hills": hillBias]
+        let secondaryProfile:  [String: Any] = ["use_highways": finalSecondary, "use_trails": min(useTrails + 0.2, 1.0), "use_tolls": 0.0,      "use_hills": hillBias]
+        let tertiaryProfile:   [String: Any] = ["use_highways": 1.0,            "use_trails": 0.0,                       "use_tolls": 1.0,      "use_hills": 0.5]
+        let quaternaryProfile: [String: Any] = ["use_highways": 0.0,            "use_trails": min(useTrails + 0.4, 1.0), "use_tolls": 0.0,      "use_hills": hillBias]
 
         func makeBody(_ profile: [String: Any], alternates: Int) -> [String: Any] {
             ["locations": [start, end],
@@ -776,8 +915,19 @@ class RouteManager: NSObject, ObservableObject {
             let type    = m["type"] as? Int ?? 0
             let idx     = m["begin_shape_index"] as? Int ?? 0
             // Map Valhalla arrive types (4,5,6) to sign 4 so navigation filters work
-            let sign    = (type == 4 || type == 5 || type == 6) ? 4 : 0
-            return GHInstruction(text: text, distanceMeters: distM, sign: sign, intervalStart: idx)
+            let sign       = (type == 4 || type == 5 || type == 6) ? 4 : 0
+            let streetNames: [String] = Array(Set(
+                (m["street_names"] as? [String] ?? []) + (m["begin_street_names"] as? [String] ?? [])
+            ))
+            let isToll    = m["toll"]       as? Bool ?? false
+            let isHighway = m["highway"]    as? Bool ?? false
+            let isUnpaved = m["rough_road"] as? Bool ?? false
+            var instr = GHInstruction(text: text, distanceMeters: distM, sign: sign, intervalStart: idx)
+            instr.streetNames = streetNames
+            instr.isToll      = isToll
+            instr.isHighway   = isHighway
+            instr.isUnpaved   = isUnpaved
+            return instr
         }
 
         let curviness = Self.computeCurviness(coords)
@@ -990,39 +1140,101 @@ class RouteManager: NSObject, ObservableObject {
     // MARK: - Saved Routes
 
     func saveCurrentRoute(name: String) {
-        guard !tripStops.isEmpty else { return }
-        let stops = tripStops.map {
-            SavedRoute.SavedStop(name: $0.name, latitude: $0.coordinate.latitude, longitude: $0.coordinate.longitude)
+        // Build stops list: prefer tripStops (multi-stop planner),
+        // fall back to single destination, then round trip (start = end = user location)
+        let stops: [SavedRoute.SavedStop]
+        if !tripStops.isEmpty {
+            stops = tripStops.map {
+                SavedRoute.SavedStop(name: $0.name, latitude: $0.coordinate.latitude, longitude: $0.coordinate.longitude)
+            }
+        } else if let dest = currentDestination {
+            let loc = dest.location
+            stops = [SavedRoute.SavedStop(name: dest.name ?? "Destination",
+                                          latitude: loc.coordinate.latitude,
+                                          longitude: loc.coordinate.longitude)]
+        } else if isRoundTrip, let coord = lastKnownLocation?.coordinate {
+            // Round trip — store origin; loading will regenerate with same params
+            stops = [SavedRoute.SavedStop(name: "Round Trip ~\(Int(lastRoundTripDistance)) mi",
+                                          latitude: coord.latitude,
+                                          longitude: coord.longitude)]
+        } else {
+            return
         }
         let opts = SavedRoute.SavedOptions(
-            curviness:      currentOptions.curviness.rawValue,
-            avoidFreeways:  currentOptions.avoidFreeways,
-            avoidMainRoads: currentOptions.avoidMainRoads,
-            avoidUnpaved:   currentOptions.avoidUnpaved,
-            useHills:       currentOptions.useHills,
-            routeCount:     currentOptions.routeCount
+            curviness:             currentOptions.curviness.rawValue,
+            avoidFreeways:         currentOptions.avoidFreeways,
+            avoidMainRoads:        currentOptions.avoidMainRoads,
+            avoidUnpaved:          currentOptions.avoidUnpaved,
+            useHills:              currentOptions.useHills,
+            routeCount:            currentOptions.routeCount,
+            roundTripDistanceMiles: isRoundTrip ? lastRoundTripDistance : nil,
+            roundTripDirection:    isRoundTrip ? lastRoundTripDirection.rawValue : nil
         )
-        let saved = SavedRoute(name: name.isEmpty ? "My Route" : name, stops: stops, options: opts)
+        let defaultName = isRoundTrip ? "Round Trip ~\(Int(lastRoundTripDistance)) mi" : "My Route"
+        let saved = SavedRoute(name: name.isEmpty ? defaultName : name, stops: stops, options: opts)
         savedRoutes.insert(saved, at: 0)
         persistSavedRoutes()
     }
 
     func loadSavedRoute(_ route: SavedRoute) async {
-        tripStops = route.stops.map { s in
-            let coord = CLLocationCoordinate2D(latitude: s.latitude, longitude: s.longitude)
-            let item  = MKMapItem(placemark: MKPlacemark(coordinate: coord))
-            item.name = s.name
-            return TripStop(name: s.name, mapItem: item)
-        }
-        currentOptions = RouteOptions(
+        let opts = RouteOptions(
             curviness:      RouteOptions.Curviness(rawValue: route.options.curviness) ?? .curvy,
             avoidFreeways:  route.options.avoidFreeways,
             avoidMainRoads: route.options.avoidMainRoads,
             avoidUnpaved:   route.options.avoidUnpaved,
             useHills:       route.options.useHills,
-            routeCount:     route.options.routeCount
+            routeCount:     1   // load exactly one route, not the original multi-alternative count
         )
-        await calculateTripRoute()
+        currentOptions = opts
+
+        if let distMiles = route.options.roundTripDistanceMiles {
+            let dir = route.options.roundTripDirection.flatMap { RoundTripDirection(rawValue: $0) } ?? .any
+            await generateRoundTrip(distanceMiles: distMiles, direction: dir, options: opts)
+        } else if route.stops.count == 1, let s = route.stops.first {
+            let coord = CLLocationCoordinate2D(latitude: s.latitude, longitude: s.longitude)
+            let item  = MKMapItem(placemark: MKPlacemark(coordinate: coord))
+            item.name = s.name
+            searchQuery = s.name
+            await getRoutes(to: item, options: opts)
+        } else {
+            tripStops = route.stops.map { s in
+                let coord = CLLocationCoordinate2D(latitude: s.latitude, longitude: s.longitude)
+                let item  = MKMapItem(placemark: MKPlacemark(coordinate: coord))
+                item.name = s.name
+                return TripStop(name: s.name, mapItem: item)
+            }
+            await calculateTripRoute()
+        }
+
+        // Auto-select the best route and signal ContentView to collapse the picker.
+        if selectedRoute == nil, let first = routes.first {
+            selectedRoute = first
+        }
+        if selectedRoute != nil {
+            activeSavedRouteID = route.id
+            didLoadSavedRoute = true
+        }
+    }
+
+    func replaceActiveSavedRoute(name: String) {
+        guard let id = activeSavedRouteID,
+              let idx = savedRoutes.firstIndex(where: { $0.id == id }) else {
+            saveCurrentRoute(name: name)
+            return
+        }
+        // Build updated entry preserving original id and date
+        let original = savedRoutes[idx]
+        saveCurrentRoute(name: name.isEmpty ? original.name : name)
+        // Remove the duplicate that saveCurrentRoute just inserted at index 0
+        if let dupIdx = savedRoutes.firstIndex(where: { $0.id != id && $0.name == (name.isEmpty ? original.name : name) }) {
+            let replacement = savedRoutes.remove(at: dupIdx)
+            savedRoutes.remove(at: savedRoutes.firstIndex(where: { $0.id == id })!)
+            var updated = replacement
+            updated = SavedRoute(id: id, name: replacement.name, date: original.date,
+                                 stops: replacement.stops, options: replacement.options)
+            savedRoutes.insert(updated, at: min(idx, savedRoutes.count))
+            persistSavedRoutes()
+        }
     }
 
     func deleteSavedRoute(_ route: SavedRoute) {
@@ -1031,15 +1243,23 @@ class RouteManager: NSObject, ObservableObject {
     }
 
     private func loadPersistedSavedRoutes() -> [SavedRoute] {
-        guard let data = UserDefaults.standard.data(forKey: Self.savedRoutesKey),
-              let routes = try? JSONDecoder().decode([SavedRoute].self, from: data)
-        else { return [] }
-        return routes
+        guard let data = UserDefaults.standard.data(forKey: Self.savedRoutesKey) else { return [] }
+        // Try bulk decode first (fast path)
+        if let routes = try? JSONDecoder().decode([SavedRoute].self, from: data) { return routes }
+        // Bulk decode failed — decode each element individually so one bad entry
+        // doesn't wipe the entire list (handles schema changes between app versions)
+        guard let rawArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        let decoder = JSONDecoder()
+        return rawArray.compactMap { dict in
+            guard let itemData = try? JSONSerialization.data(withJSONObject: dict) else { return nil }
+            return try? decoder.decode(SavedRoute.self, from: itemData)
+        }
     }
 
     private func persistSavedRoutes() {
         guard let data = try? JSONEncoder().encode(savedRoutes) else { return }
         UserDefaults.standard.set(data, forKey: Self.savedRoutesKey)
+        pushRemoteRoutes()
     }
 
     // MARK: - Round Trip Generation
@@ -1403,6 +1623,82 @@ class RouteManager: NSObject, ObservableObject {
         lastCurvinessRegion  = nil
     }
 
+    // MARK: - Road Surface Quality Overlay
+
+    func fetchSurfaceOverlay(for region: MKCoordinateRegion) {
+        guard region.span.latitudeDelta < 0.7 else {
+            surfaceOverlays = []
+            lastSurfaceRegion = nil
+            return
+        }
+        if let last = lastSurfaceRegion {
+            let latMove = abs(last.center.latitude  - region.center.latitude)
+            let lonMove = abs(last.center.longitude - region.center.longitude)
+            let threshold = last.span.latitudeDelta * 0.25
+            if latMove < threshold && lonMove < threshold { return }
+        }
+        surfaceTask?.cancel()
+        surfaceTask = Task {
+            try? await Task.sleep(for: .milliseconds(800))
+            guard !Task.isCancelled else { return }
+            await performSurfaceFetch(region: region)
+        }
+    }
+
+    func clearSurfaceOverlay() {
+        surfaceTask?.cancel()
+        surfaceOverlays   = []
+        lastSurfaceRegion = nil
+    }
+
+    private func performSurfaceFetch(region: MKCoordinateRegion) async {
+        let lat = region.span.latitudeDelta
+        let lon = region.span.longitudeDelta
+        let south = region.center.latitude  - lat / 2
+        let north = region.center.latitude  + lat / 2
+        let west  = region.center.longitude - lon / 2
+        let east  = region.center.longitude + lon / 2
+
+        let types = lat < 0.15
+            ? "motorway|trunk|primary|secondary|tertiary|residential"
+            : "motorway|trunk|primary|secondary"
+
+        let query = """
+        [out:json][timeout:25][bbox:\(south),\(west),\(north),\(east)];
+        way["highway"~"^(\(types))$"]["surface"];
+        out geom qt;
+        """
+        guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://overpass-api.de/api/interpreter?data=\(encoded)") else { return }
+
+        isFetchingSurface = true
+        lastSurfaceRegion = region
+        defer { isFetchingSurface = false }
+
+        guard let (data, _) = try? await URLSession.shared.data(from: url),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let elements = json["elements"] as? [[String: Any]],
+              !Task.isCancelled else { return }
+
+        var overlays: [SurfacePolyline] = []
+        for element in elements {
+            guard element["type"] as? String == "way",
+                  let tags = element["tags"] as? [String: Any],
+                  let surfaceTag = tags["surface"] as? String,
+                  let geometry = element["geometry"] as? [[String: Any]] else { continue }
+            var coords = geometry.compactMap { node -> CLLocationCoordinate2D? in
+                guard let la = node["lat"] as? Double, let lo = node["lon"] as? Double else { return nil }
+                return CLLocationCoordinate2D(latitude: la, longitude: lo)
+            }
+            guard coords.count >= 2 else { continue }
+            let surface = RoadSurface(tag: surfaceTag)
+            let pl = SurfacePolyline(coordinates: &coords, count: coords.count)
+            pl.surface = surface
+            overlays.append(pl)
+        }
+        surfaceOverlays = overlays
+    }
+
     private func performCurvinessFetch(region: MKCoordinateRegion) async {
         let lat = region.span.latitudeDelta
         let lon = region.span.longitudeDelta
@@ -1522,7 +1818,8 @@ class RouteManager: NSObject, ObservableObject {
             if !allCoords.isEmpty { allCoords.removeLast() }
             allCoords.append(contentsOf: coords)
             let adjusted = seg.instructions.map {
-                GHInstruction(text: $0.text, distanceMeters: $0.distanceMeters, sign: $0.sign, intervalStart: $0.intervalStart + offset)
+                GHInstruction(text: $0.text, distanceMeters: $0.distanceMeters, sign: $0.sign, intervalStart: $0.intervalStart + offset,
+                              streetNames: $0.streetNames, isToll: $0.isToll, isHighway: $0.isHighway, isUnpaved: $0.isUnpaved)
             }
             allInstructions.append(contentsOf: adjusted)
             totalDist += seg.distanceMeters
@@ -1541,12 +1838,16 @@ class RouteManager: NSObject, ObservableObject {
         guard let route = selectedRoute else { return }
         isNavigating      = true
         currentStepIndex  = 0
+        navigationStopIndex = 0
         announcedTiers    = []
         activeHazard      = nil
         hazards           = []
         liveTrackCoords   = []
         currentSpeedLimit = nil
         lastSpeedLimitLocation = nil
+        lastGPSUpdateTime = Date()
+        isInTunnel        = false
+        deadReckoningCoord = nil
         setupAudio()
         let routeToFetch  = route
         Task { await fetchLiveHazards(for: routeToFetch) }
@@ -1554,6 +1855,12 @@ class RouteManager: NSObject, ObservableObject {
         if let first = steps.first {
             currentInstruction = first.text
             if !isPreviewMode { say("Starting navigation. \(first.text)", isNavigation: true) }
+        }
+        // Start dead-reckoning timer for tunnel handling (only in real GPS mode)
+        if !simulationMode {
+            deadReckoningTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.stepDeadReckoning() }
+            }
         }
         if simulationMode {
             // Snap camera immediately to the route start so preview always begins at the beginning
@@ -1571,6 +1878,10 @@ class RouteManager: NSObject, ObservableObject {
         simulatedCoordinate  = nil
         isSimulationPaused   = false
         synthesizer.stopSpeaking(at: .immediate)
+        deadReckoningTimer?.invalidate()
+        deadReckoningTimer   = nil
+        isInTunnel           = false
+        deadReckoningCoord   = nil
         if !isPreviewMode {
             cancelRoutes()
         }
@@ -1587,8 +1898,141 @@ class RouteManager: NSObject, ObservableObject {
         lastSpeedLimitLocation = nil
     }
 
+    // MARK: - Dead Reckoning (tunnel / GPS loss)
+
+    /// Called every 0.5 s during real-GPS navigation. Detects GPS loss and advances
+    /// the user's estimated position along the route using last-known speed + heading.
+    private func stepDeadReckoning() {
+        guard isNavigating, !simulationMode else { return }
+
+        let staleness = Date().timeIntervalSince(lastGPSUpdateTime)
+
+        // GPS is considered lost after 3 seconds without an update
+        guard staleness > 3 else {
+            isInTunnel = false
+            deadReckoningCoord = nil
+            return
+        }
+
+        guard let route = selectedRoute,
+              let lastLoc = lastKnownLocation else { return }
+
+        if !isInTunnel {
+            isInTunnel = true
+            say("Entering tunnel. GPS signal lost.", isNavigation: false)
+        }
+
+        // Estimate how far we've travelled since GPS was lost
+        let speedMs = max(0, lastLoc.speed)    // m/s (use last known speed)
+        let elapsed = staleness - 3             // seconds since we entered tunnel
+        let distanceTravelled = speedMs * elapsed
+
+        // Walk distanceTravelled along the route polyline starting from lastLoc
+        let allCoords = polylineCoords(route.polyline)
+        guard allCoords.count >= 2 else { return }
+
+        // Find closest point on polyline to lastLoc
+        let lastCoord = lastLoc.coordinate
+        var minDist = Double.infinity
+        var closestIdx = 0
+        for (i, coord) in allCoords.enumerated() {
+            let d = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+                       .distance(from: CLLocation(latitude: lastCoord.latitude, longitude: lastCoord.longitude))
+            if d < minDist { minDist = d; closestIdx = i }
+        }
+
+        // Walk forward distanceTravelled from closestIdx
+        var remaining = distanceTravelled
+        var idx = closestIdx
+        while idx < allCoords.count - 1 && remaining > 0 {
+            let a = CLLocation(latitude: allCoords[idx].latitude, longitude: allCoords[idx].longitude)
+            let b = CLLocation(latitude: allCoords[idx + 1].latitude, longitude: allCoords[idx + 1].longitude)
+            let segLen = b.distance(from: a)
+            if remaining <= segLen {
+                let t = remaining / segLen
+                deadReckoningCoord = CLLocationCoordinate2D(
+                    latitude:  allCoords[idx].latitude  + t * (allCoords[idx + 1].latitude  - allCoords[idx].latitude),
+                    longitude: allCoords[idx].longitude + t * (allCoords[idx + 1].longitude - allCoords[idx].longitude)
+                )
+                return
+            }
+            remaining -= segLen
+            idx += 1
+        }
+        // Reached end of route
+        deadReckoningCoord = allCoords.last
+    }
+
+    /// Skip the current stop and recalculate the route to the remaining stops.
+    func skipCurrentStop() async {
+        let nextIndex = navigationStopIndex + 1
+        guard nextIndex < tripStops.count else { return }
+
+        navigationStopIndex = nextIndex
+        let remainingStops = Array(tripStops[nextIndex...])
+
+        let startLoc: CLLocation
+        if let known = lastKnownLocation {
+            startLoc = known
+        } else if let fetched = await getCurrentLocation() {
+            startLoc = fetched
+        } else {
+            return
+        }
+
+        isRerouting = true
+        defer { isRerouting = false }
+
+        var locations: [[String: Any]] = [
+            ["lon": startLoc.coordinate.longitude, "lat": startLoc.coordinate.latitude, "type": "break"]
+        ]
+        for stop in remainingStops {
+            locations.append(["lon": stop.coordinate.longitude, "lat": stop.coordinate.latitude, "type": "break"])
+        }
+
+        let bias: Double
+        switch currentOptions.curviness {
+        case .straight:  bias = 0.90
+        case .curvy:     bias = 0.15
+        case .veryCurvy: bias = 0.02
+        }
+        let profile: [String: Any] = ["use_highways": bias,
+                                       "use_trails": currentOptions.avoidUnpaved ? 0.0 : 0.4,
+                                       "use_tolls": 0.5, "use_hills": currentOptions.useHills]
+        let body: [String: Any] = [
+            "locations": locations, "costing": "motorcycle",
+            "costing_options": ["motorcycle": profile],
+            "directions_options": ["language": "en-US"],
+            "units": units == .imperial ? "miles" : "kilometers", "alternates": 0
+        ]
+
+        let fetched = (try? await fetchValhallaRoutes(body: body)) ?? []
+        guard let best = fetched.first else { return }
+
+        currentDestination = remainingStops.last?.mapItem
+        routes = [best]
+        selectedRoute = best
+        waypoints = []
+        segmentCurviness = []
+
+        // Restart navigation on the new route
+        currentStepIndex = 0
+        announcedTiers = []
+        let steps = best.instructions.filter { !$0.text.isEmpty && $0.sign != 4 }
+        if let first = steps.first {
+            currentInstruction = first.text
+            say("Skipping stop. \(first.text)", isNavigation: true)
+        }
+    }
+
     func update(with location: CLLocation) {
         lastKnownLocation = location
+        lastGPSUpdateTime = Date()
+        // GPS came back — exit tunnel mode
+        if isInTunnel {
+            isInTunnel = false
+            deadReckoningCoord = nil
+        }
         if !simulationMode, location.course >= 0 {
             currentHeading = location.course
         }
@@ -1596,6 +2040,13 @@ class RouteManager: NSObject, ObservableObject {
         if lastSpeedLimitLocation.map({ location.distance(from: $0) > 150 }) ?? true {
             lastSpeedLimitLocation = location
             Task { await self.fetchSpeedLimit(at: location.coordinate) }
+        }
+        // Speed limit overage check (only flag >5 mph over to reduce false positives)
+        let currentMph = max(0, location.speed) * 2.23694
+        if let limit = currentSpeedLimit, currentMph > Double(limit) + 5 {
+            isOverSpeedLimit = true
+        } else {
+            isOverSpeedLimit = false
         }
         // Append to live track during navigation — only every ≥5m to avoid 20Hz rebuilds
         if isNavigating {
@@ -2027,8 +2478,11 @@ class RouteManager: NSObject, ObservableObject {
     // MARK: - Live hazard fetching
     private func fetchLiveHazards(for route: GHRoute) async {
         let bbox = routeBoundingBox(route.polyline)
-        hazards = await fetchSpeedCameras(bbox: bbox)
-        print("Loaded \(hazards.count) speed camera(s)")
+        async let cameras    = fetchSpeedCameras(bbox: bbox)
+        async let redLights  = fetchRedLightCameras(bbox: bbox)
+        let all = await cameras + redLights
+        hazards = all
+        print("Loaded \(all.count) hazard(s)")
     }
 
     // Bounding box from polyline with padding
@@ -2067,6 +2521,24 @@ class RouteManager: NSObject, ObservableObject {
         } catch {
             print("Overpass error: \(error)")
             return []
+        }
+    }
+
+    // Overpass API — community-mapped red light cameras
+    private func fetchRedLightCameras(
+        bbox: (minLat: Double, minLon: Double, maxLat: Double, maxLon: Double)
+    ) async -> [RouteHazard] {
+        let query = "[out:json][timeout:15];node[\"camera:type\"=\"red_light\"](\(bbox.minLat),\(bbox.minLon),\(bbox.maxLat),\(bbox.maxLon));out;"
+        var comps = URLComponents(string: "https://overpass-api.de/api/interpreter")!
+        comps.queryItems = [URLQueryItem(name: "data", value: query)]
+        guard let url = comps.url else { return [] }
+        guard let (data, _) = try? await URLSession.shared.data(from: url),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let elements = json["elements"] as? [[String: Any]] else { return [] }
+        return elements.compactMap { el -> RouteHazard? in
+            guard let lat = el["lat"] as? Double, let lon = el["lon"] as? Double else { return nil }
+            return RouteHazard(type: .redLightCamera,
+                               coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon))
         }
     }
 

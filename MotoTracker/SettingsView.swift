@@ -8,6 +8,7 @@ struct SettingsView: View {
     var mapViewRef: MKMapView? = nil
     var currentLocation: CLLocation? = nil
     @Environment(\.dismiss) var dismiss
+    @State private var showingBugReport = false
 
     var body: some View {
         NavigationStack {
@@ -40,10 +41,24 @@ struct SettingsView: View {
                         Label("Units of Measure", systemImage: "ruler")
                     }
 
+                    NavigationLink {
+                        WebRoutePlannerView()
+                    } label: {
+                        Label("Web Route Planner", systemImage: "globe")
+                    }
+
                     Toggle(isOn: $routeManager.simulationMode) {
                         Label("Simulate Driving", systemImage: "figure.motorcycle")
                     }
                     .tint(.orange)
+                }
+
+                Section("Safety") {
+                    NavigationLink {
+                        CrashDetectionSettingsView()
+                    } label: {
+                        Label("Crash Detection", systemImage: "exclamationmark.triangle.fill")
+                    }
                 }
 
                 Section("Maps") {
@@ -63,6 +78,20 @@ struct SettingsView: View {
                     }
                 }
 
+                Section {
+                    NavigationLink {
+                        AboutView()
+                    } label: {
+                        Label("About", systemImage: "info.circle")
+                    }
+                    Button {
+                        showingBugReport = true
+                    } label: {
+                        Label("Report a Bug", systemImage: "ladybug")
+                            .foregroundStyle(.primary)
+                    }
+                }
+
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
@@ -71,7 +100,95 @@ struct SettingsView: View {
                     Button("Done") { dismiss() }.fontWeight(.semibold)
                 }
             }
+            .sheet(isPresented: $showingBugReport) {
+                BugReportView()
+            }
         }
+    }
+}
+
+// MARK: - Web Route Planner
+private struct WebRoutePlannerView: View {
+    private let plannerURL = URL(string: "https://brianwhitman71-cell.github.io/MotoTracker/WebPlanner/")!
+
+    var body: some View {
+        List {
+            Section {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "globe")
+                            .font(.system(size: 32))
+                            .foregroundStyle(.blue)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Plan routes on any computer or tablet using a full-screen map, then send them directly to this app with a tap.")
+                                .font(.subheadline)
+                                .foregroundStyle(.primary)
+                        }
+                    }
+                    .padding(.top, 4)
+
+                    Divider()
+
+                    Text("Web Planner URL")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(plannerURL.absoluteString)
+                        .font(.caption)
+                        .foregroundStyle(.blue)
+                        .textSelection(.enabled)
+                }
+                .padding(.vertical, 6)
+            } header: {
+                Text("Plan on Your Computer")
+            } footer: {
+                Text("Open the URL above in any browser. Build your route, then tap \"Send to Phone\" — it will open automatically in 2Wheel Tracker.")
+            }
+
+            Section {
+                Link(destination: plannerURL) {
+                    HStack {
+                        Spacer()
+                        Label("Open Web Planner", systemImage: "safari")
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                    }
+                }
+            }
+        }
+        .navigationTitle("Web Route Planner")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - About
+private struct AboutView: View {
+    private var version: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "–"
+    }
+    private var build: String {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "–"
+    }
+    private var deployedAt: String {
+        guard let raw = Bundle.main.infoDictionary?["DeployedAt"] as? String else { return "–" }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withFullDate, .withTime, .withColonSeparatorInTime]
+        guard let date = formatter.date(from: raw) else { return raw }
+        let out = DateFormatter()
+        out.dateStyle = .medium
+        out.timeStyle = .short
+        return out.string(from: date)
+    }
+
+    var body: some View {
+        List {
+            Section {
+                LabeledContent("Version", value: version)
+                LabeledContent("Build", value: build)
+                LabeledContent("Deployed", value: deployedAt)
+            }
+        }
+        .navigationTitle("About")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -594,5 +711,85 @@ extension Color {
         var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         ui.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
         return Color(hue: Double(h), saturation: Double(s), brightness: max(Double(b) - amount, 0))
+    }
+}
+
+// MARK: - Crash Detection Settings
+
+struct CrashDetectionSettingsView: View {
+    @State private var contactName  = UserDefaults.standard.string(forKey: CrashDetector.contactNameKey)  ?? ""
+    @State private var contactPhone = UserDefaults.standard.string(forKey: CrashDetector.contactPhoneKey) ?? ""
+    @State private var saved = false
+
+    var body: some View {
+        List {
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("How it works", systemImage: "info.circle")
+                        .font(.subheadline.weight(.semibold))
+                    Text("During navigation, 2Wheel Tracker monitors for sudden high-G impacts. If a crash is detected, a 30-second countdown begins. You can cancel it — if you don't, an SMS is sent to your emergency contact with your GPS location.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 4)
+            }
+
+            Section("Emergency Contact") {
+                HStack {
+                    Label("Name", systemImage: "person")
+                        .font(.subheadline)
+                    Spacer()
+                    TextField("Contact name", text: $contactName)
+                        .multilineTextAlignment(.trailing)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .autocorrectionDisabled()
+                }
+
+                HStack {
+                    Label("Phone", systemImage: "phone")
+                        .font(.subheadline)
+                    Spacer()
+                    TextField("+1 555 000 0000", text: $contactPhone)
+                        .multilineTextAlignment(.trailing)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .keyboardType(.phonePad)
+                }
+            }
+
+            Section {
+                Button {
+                    UserDefaults.standard.set(contactName,  forKey: CrashDetector.contactNameKey)
+                    UserDefaults.standard.set(contactPhone, forKey: CrashDetector.contactPhoneKey)
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    saved = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { saved = false }
+                } label: {
+                    HStack {
+                        Spacer()
+                        if saved {
+                            Label("Saved", systemImage: "checkmark")
+                                .foregroundStyle(.green)
+                        } else {
+                            Text("Save Contact")
+                                .foregroundStyle(.blue)
+                        }
+                        Spacer()
+                    }
+                }
+            }
+
+            if contactPhone.isEmpty {
+                Section {
+                    Label("Add an emergency contact above to enable crash detection alerts.",
+                          systemImage: "exclamationmark.circle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+        }
+        .navigationTitle("Crash Detection")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

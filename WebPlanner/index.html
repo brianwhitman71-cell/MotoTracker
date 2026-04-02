@@ -110,6 +110,31 @@
   .btn-home-clear { background: none; border: 1px solid #442222; border-radius: 8px; color: #cc4444; padding: 9px 16px; font-size: 13px; cursor: pointer; }
   .btn-home-clear:hover { background: #1e1212; }
 
+  /* Saved Routes */
+  .sr-token-row { display: flex; gap: 8px; margin-top: 8px; }
+  .sr-token-row input { flex: 1; background: #252525; border: 1px solid #333; border-radius: 8px; padding: 8px 10px; color: #eee; font-size: 12px; outline: none; font-family: 'SF Mono', monospace; }
+  .sr-token-row input:focus { border-color: #555; }
+  .sr-token-row button { background: #ff6b00; border: none; border-radius: 8px; padding: 8px 12px; color: #fff; font-size: 12px; cursor: pointer; white-space: nowrap; }
+  .sr-token-row button:hover { background: #e55f00; }
+  .sr-item { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid #222; }
+  .sr-item:last-child { border-bottom: none; }
+  .sr-info { flex: 1; min-width: 0; }
+  .sr-name { font-size: 13px; color: #ddd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sr-meta { font-size: 11px; color: #666; margin-top: 2px; }
+  .sr-actions { display: flex; gap: 5px; flex-shrink: 0; }
+  .sr-load-btn { background: #1c2a1c; border: 1px solid #2a442a; border-radius: 6px; color: #4caf50; font-size: 11px; padding: 4px 9px; cursor: pointer; }
+  .sr-load-btn:hover { background: #223022; }
+  .sr-del-btn { background: none; border: none; color: #555; font-size: 13px; cursor: pointer; padding: 2px 4px; border-radius: 4px; }
+  .sr-del-btn:hover { color: #ff4444; background: #2a1a1a; }
+  .sr-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .sr-header .section-title { margin-bottom: 0; }
+  .sr-sync-btn { background: none; border: none; color: #555; font-size: 14px; cursor: pointer; padding: 0 4px; }
+  .sr-sync-btn:hover { color: #aaa; }
+  .btn-save-route { width: 100%; margin-top: 10px; padding: 8px; border-radius: 8px; border: 1px solid #2a3a2a; background: #1a251a; color: #4caf50; font-size: 13px; cursor: pointer; display: none; }
+  .btn-save-route:hover { background: #203020; }
+  .sr-change-token { background: none; border: none; color: #555; font-size: 11px; cursor: pointer; padding: 2px 0; text-decoration: underline; }
+  .sr-change-token:hover { color: #888; }
+
   /* Locate me button */
   .locate-btn { position: absolute; top: 80px; right: 10px; z-index: 500; background: #1a1a1a; border: 1px solid #333; border-radius: 8px; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 16px; color: #ccc; }
   .locate-btn:hover { background: #252525; color: #fff; }
@@ -175,6 +200,26 @@
       <div id="stops-list">
         <div class="empty-msg">No stops yet<br><span style="font-size:11px">Search above or click the map to add your first stop</span></div>
       </div>
+    </div>
+
+    <!-- Saved Routes -->
+    <div class="section">
+      <div class="sr-header">
+        <div class="section-title">Saved Routes</div>
+        <button class="sr-sync-btn" onclick="syncRoutes()" title="Sync now">↻</button>
+      </div>
+      <div id="sr-token-setup" style="display:none">
+        <div class="hint">Enter your GitHub token to sync saved routes with the iOS app.</div>
+        <div class="sr-token-row">
+          <input id="sr-token-input" type="password" placeholder="github_pat_…" autocomplete="off" spellcheck="false">
+          <button onclick="saveGHToken()">Save</button>
+        </div>
+      </div>
+      <div id="sr-list"></div>
+      <div id="sr-token-footer" style="display:none;margin-top:6px">
+        <button class="sr-change-token" onclick="changeGHToken()">Change token</button>
+      </div>
+      <button class="btn-save-route" id="btn-save-route" onclick="saveRoute()">💾 Save Route</button>
     </div>
 
     <!-- Options -->
@@ -598,6 +643,7 @@ function moveStop(from, to) {
 
 function updateSendBtn() {
   document.getElementById('send-btn').disabled = stops.length < 2;
+  updateSaveRouteBtn();
 }
 
 // ── Route preview (Valhalla/Stadia) ────────────────────────────────────────
@@ -837,10 +883,194 @@ function goToMyLocation() {
   );
 }
 
+// ── Saved Routes Sync ────────────────────────────────────────────────────────
+
+const GH_TOKEN_KEY  = 'moto_gh_token';
+const GH_SYNC_REPO  = 'brianwhitman71-cell/mototracker-bugs';
+const GH_SYNC_PATH  = 'sync/routes.json';
+
+let savedRoutes = [];
+let syncSHA     = null;
+
+function getGHToken()   { return localStorage.getItem(GH_TOKEN_KEY) || ''; }
+function storeGHToken(t){ localStorage.setItem(GH_TOKEN_KEY, t.trim()); }
+
+function saveGHToken() {
+  const val = document.getElementById('sr-token-input').value.trim();
+  if (!val) return;
+  storeGHToken(val);
+  renderSavedRoutesSection();
+  syncRoutes();
+}
+
+function changeGHToken() {
+  storeGHToken('');
+  renderSavedRoutesSection();
+}
+
+function renderSavedRoutesSection() {
+  const token = getGHToken();
+  document.getElementById('sr-token-setup').style.display  = token ? 'none'  : 'block';
+  document.getElementById('sr-token-footer').style.display = token ? 'block' : 'none';
+  renderSavedRoutesList();
+  updateSaveRouteBtn();
+}
+
+function updateSaveRouteBtn() {
+  const btn = document.getElementById('btn-save-route');
+  if (btn) btn.style.display = (getGHToken() && stops.length >= 1) ? 'block' : 'none';
+}
+
+async function syncRoutes() {
+  const token = getGHToken();
+  if (!token) return;
+  const url = `https://api.github.com/repos/${GH_SYNC_REPO}/contents/${GH_SYNC_PATH}`;
+  try {
+    const r = await fetch(url, { headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/vnd.github+json' } });
+    if (r.status === 404) { savedRoutes = []; syncSHA = null; renderSavedRoutesList(); return; }
+    if (!r.ok) return;
+    const json = await r.json();
+    syncSHA = json.sha;
+    const clean   = json.content.replace(/\n/g, '');
+    const decoded = decodeURIComponent(escape(atob(clean)));
+    const payload = JSON.parse(decoded);
+    savedRoutes = (payload.routes || []).sort((a,b) => new Date(b.date) - new Date(a.date));
+    renderSavedRoutesList();
+  } catch(e) { /* best-effort */ }
+}
+
+async function pushRoutes() {
+  const token = getGHToken();
+  if (!token) return;
+  const sorted  = [...savedRoutes].sort((a,b) => new Date(b.date) - new Date(a.date));
+  const payload = JSON.stringify({ schemaVersion: 1, routes: sorted });
+  const encoded = btoa(unescape(encodeURIComponent(payload)));
+  const url = `https://api.github.com/repos/${GH_SYNC_REPO}/contents/${GH_SYNC_PATH}`;
+  const body = { message: 'Sync routes', content: encoded };
+  if (syncSHA) body.sha = syncSHA;
+  try {
+    const r = await fetch(url, {
+      method: 'PUT',
+      headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (!r.ok) return;
+    const json = await r.json();
+    syncSHA = json.content?.sha || syncSHA;
+  } catch(e) { /* best-effort */ }
+}
+
+function saveRoute() {
+  if (!getGHToken() || stops.length < 1) return;
+  const defaultName = stops.map(s => s.name.split(',')[0]).join(' → ');
+  const name = prompt('Route name:', defaultName);
+  if (!name) return;
+
+  const curv = curviness === 'very_curvy' ? 'Very Curvy'
+             : curviness === 'straight'    ? 'Straight'
+             : curviness.charAt(0).toUpperCase() + curviness.slice(1);
+
+  const route = {
+    id:    crypto.randomUUID(),
+    name:  name,
+    date:  new Date().toISOString(),
+    stops: stops.map(s => ({ name: s.name, latitude: s.lat, longitude: s.lng })),
+    options: {
+      curviness:      curv,
+      avoidFreeways:  document.getElementById('avoid-highways').checked,
+      avoidMainRoads: false,
+      avoidUnpaved:   document.getElementById('avoid-unpaved').checked,
+      useHills:       parseFloat(document.getElementById('hills-slider').value),
+      routeCount:     routeCount
+    }
+  };
+
+  savedRoutes.unshift(route);
+  renderSavedRoutesList();
+  pushRoutes();
+}
+
+function loadSavedRoute(routeId) {
+  const route = savedRoutes.find(r => r.id === routeId);
+  if (!route) return;
+
+  if (shapingMode) toggleShaping();
+  clearViaPoints();
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
+  stops   = [];
+  if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+  document.getElementById('route-info').style.display = 'none';
+  document.getElementById('shape-btn').style.display  = 'none';
+
+  for (const stop of (route.stops || [])) {
+    const m = L.marker([stop.latitude, stop.longitude]).addTo(map).bindPopup(stop.name);
+    markers.push(m);
+    stops.push({ name: stop.name, lat: stop.latitude, lng: stop.longitude });
+  }
+
+  if (route.options) {
+    const rawC = (route.options.curviness || 'Mixed').toLowerCase().replace(' ', '_');
+    const curv = rawC === 'very_curvy' || rawC === 'very curvy' ? 'very_curvy' : rawC;
+    const btn  = document.querySelector(`.curv-btn[data-val="${curv}"]`);
+    if (btn) setCurviness(curv, btn);
+    document.getElementById('avoid-highways').checked = !!(route.options.avoidFreeways);
+    document.getElementById('avoid-unpaved').checked  = !!(route.options.avoidUnpaved);
+    document.getElementById('hills-slider').value = route.options.useHills ?? 0.5;
+    updateHillsLabel();
+    routeCount = route.options.routeCount || 3;
+    document.getElementById('route-count-val').textContent = routeCount;
+  }
+
+  renderStops();
+  updateSendBtn();
+  updateSaveRouteBtn();
+
+  if (stops.length >= 2) {
+    map.fitBounds(L.latLngBounds(stops.map(s => [s.lat, s.lng])), { padding: [40, 40] });
+  } else if (stops.length === 1) {
+    map.setView([stops[0].lat, stops[0].lng], 12);
+  }
+}
+
+function deleteRemoteSavedRoute(routeId) {
+  if (!confirm('Delete this saved route?')) return;
+  savedRoutes = savedRoutes.filter(r => r.id !== routeId);
+  renderSavedRoutesList();
+  pushRoutes();
+}
+
+function renderSavedRoutesList() {
+  const list = document.getElementById('sr-list');
+  if (!list) return;
+  if (!getGHToken()) { list.innerHTML = ''; return; }
+  if (!savedRoutes.length) {
+    list.innerHTML = '<div class="hint" style="padding:6px 0;color:#555">No saved routes yet</div>';
+    return;
+  }
+  list.innerHTML = savedRoutes.map(r => {
+    const d = new Date(r.date);
+    const dateStr = isNaN(d) ? '—' : d.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
+    const n = (r.stops || []).length;
+    return `<div class="sr-item">
+      <div class="sr-info">
+        <div class="sr-name">${escHtml(r.name)}</div>
+        <div class="sr-meta">${n} stop${n!==1?'s':''} · ${dateStr}</div>
+      </div>
+      <div class="sr-actions">
+        <button class="sr-load-btn" onclick="loadSavedRoute('${r.id}')">Load</button>
+        <button class="sr-del-btn" onclick="deleteRemoteSavedRoute('${r.id}')" title="Delete">✕</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
 // ── Init ────────────────────────────────────────────────────────────────────
 renderHomeBar();
 const _home = loadHome();
 if (_home) addHomeAsFirstStop(_home);
+renderSavedRoutesSection();
+if (getGHToken()) syncRoutes();
 </script>
 </body>
 </html>
