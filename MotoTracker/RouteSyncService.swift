@@ -61,8 +61,13 @@ enum RouteSyncService {
     // MARK: - Upload
 
     /// Uploads the full routes list. Returns the new file SHA on success.
+    /// Automatically retries once with a fresh SHA if a conflict (422) is returned.
     @discardableResult
     static func uploadRoutes(_ routes: [SavedRoute], sha: String?) async throws -> String? {
+        return try await attemptUpload(routes: routes, sha: sha, isRetry: false)
+    }
+
+    private static func attemptUpload(routes: [SavedRoute], sha: String?, isRetry: Bool) async throws -> String? {
         let payload  = SyncPayload(schemaVersion: 1, routes: routes)
         let jsonData = try iso8601Encoder.encode(payload)
 
@@ -83,14 +88,32 @@ enum RouteSyncService {
         req.timeoutInterval = 20
 
         let (data, response) = try await URLSession.shared.data(for: req)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            throw URLError(.badServerResponse)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+
+        // 409 or 422 = SHA conflict — fetch fresh SHA and retry once
+        if (http.statusCode == 409 || http.statusCode == 422) && !isRetry {
+            let freshSHA = await fetchCurrentSHA()
+            return try await attemptUpload(routes: routes, sha: freshSHA, isRetry: true)
         }
 
-        // Extract new SHA from response so caller can update without a round-trip
+        guard (200...299).contains(http.statusCode) else { throw URLError(.badServerResponse) }
+
         let json    = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         let content = json?["content"] as? [String: Any]
         return content?["sha"] as? String
+    }
+
+    /// Fetches only the current file SHA from the GitHub API.
+    static func fetchCurrentSHA() async -> String? {
+        guard let url = URL(string: apiURL) else { return nil }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(Secrets.githubBugToken)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.timeoutInterval = 10
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return json["sha"] as? String
     }
 
     // MARK: - Merge

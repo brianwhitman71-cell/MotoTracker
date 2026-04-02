@@ -1043,7 +1043,12 @@ async function syncRoutes() {
 
 async function pushRoutes() {
   const token = getGHToken();
-  if (!token) return;
+  if (!token || savedRoutes.length === 0) return;
+  await attemptPush(false);
+}
+
+async function attemptPush(isRetry) {
+  const token = getGHToken();
   const sorted  = [...savedRoutes].sort((a,b) => new Date(b.date) - new Date(a.date));
   const payload = JSON.stringify({ schemaVersion: 1, routes: sorted });
   const encoded = btoa(unescape(encodeURIComponent(payload)));
@@ -1055,6 +1060,12 @@ async function pushRoutes() {
       headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
+    if ((r.status === 409 || r.status === 422) && !isRetry) {
+      // SHA conflict — fetch fresh SHA and retry once
+      await syncRoutes();
+      await attemptPush(true);
+      return;
+    }
     if (!r.ok) return;
     const json = await r.json();
     syncSHA = json.content?.sha || syncSHA;
