@@ -1162,7 +1162,6 @@ function deleteRemoteSavedRoute(routeId) {
 function renderSavedRoutesList() {
   const list = document.getElementById('sr-list');
   if (!list) return;
-  if (!getGHToken()) { list.innerHTML = ''; return; }
   if (!savedRoutes.length) {
     list.innerHTML = '<div class="hint" style="padding:6px 0;color:#555">No saved routes yet</div>';
     return;
