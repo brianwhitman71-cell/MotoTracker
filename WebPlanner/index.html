@@ -1043,13 +1043,25 @@ async function syncRoutes() {
 
 async function pushRoutes() {
   const token = getGHToken();
-  if (!token || savedRoutes.length === 0) return;
-  await attemptPush(false);
+  if (!token) return;  // need token to write; empty array is valid (propagates deletes)
+  await attemptPush([...savedRoutes], false);
 }
 
-async function attemptPush(isRetry) {
+// Fetches only the current SHA from GitHub — does NOT overwrite savedRoutes.
+async function fetchSyncSHA() {
+  try {
+    const r = await fetch(GH_API_URL, { headers: { 'Accept': 'application/vnd.github+json' } });
+    if (!r.ok) return;
+    const json = await r.json();
+    syncSHA = json.sha || null;
+  } catch(e) { /* best-effort */ }
+}
+
+// routesToPush is captured at call time so a retry always uses the intended list,
+// not whatever savedRoutes happens to be after an intervening syncRoutes() call.
+async function attemptPush(routesToPush, isRetry) {
   const token = getGHToken();
-  const sorted  = [...savedRoutes].sort((a,b) => new Date(b.date) - new Date(a.date));
+  const sorted  = [...routesToPush].sort((a,b) => new Date(b.date) - new Date(a.date));
   const payload = JSON.stringify({ schemaVersion: 1, routes: sorted });
   const encoded = btoa(unescape(encodeURIComponent(payload)));
   const body = { message: 'Sync routes', content: encoded };
@@ -1061,9 +1073,9 @@ async function attemptPush(isRetry) {
       body: JSON.stringify(body)
     });
     if ((r.status === 409 || r.status === 422) && !isRetry) {
-      // SHA conflict — fetch fresh SHA and retry once
-      await syncRoutes();
-      await attemptPush(true);
+      // SHA conflict — fetch just the fresh SHA (don't overwrite savedRoutes) and retry
+      await fetchSyncSHA();
+      await attemptPush(routesToPush, true);
       return;
     }
     if (!r.ok) return;
