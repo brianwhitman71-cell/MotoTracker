@@ -1,1 +1,1 @@
-{"schemaVersion":1,"routes":[{"id":"bf4141b5-6411-42bf-a345-4a1efb1496dc","name":"test 13","date":"2026-04-02T19:16:38.797Z","stops":[{"name":"11035 Linbrook Lane, Duluth, GA, USA","latitude":34.0512122,"longitude":-84.205307},{"name":"RockSolid Brewing Co., Ball Ground, GA, USA","latitude":34.33733199461936,"longitude":-84.37567464339263}],"options":{"curviness":"Mixed","avoidFreeways":false,"avoidMainRoads":false,"avoidUnpaved":false,"useHills":0.5,"routeCount":3}}]}
+{"schemaVersion":1,"routes":[]}
