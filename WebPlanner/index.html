@@ -1018,7 +1018,7 @@ function renderSavedRoutesSection() {
 
 function updateSaveRouteBtn() {
   const btn = document.getElementById('btn-save-route');
-  if (btn) btn.style.display = (getGHToken() && stops.length >= 1) ? 'block' : 'none';
+  if (btn) btn.style.display = stops.length >= 1 ? 'block' : 'none';
 }
 
 // Read via GitHub Contents API — no auth needed for public repo, no CDN caching
@@ -1043,11 +1043,10 @@ async function pushRoutes() {
   const sorted  = [...savedRoutes].sort((a,b) => new Date(b.date) - new Date(a.date));
   const payload = JSON.stringify({ schemaVersion: 1, routes: sorted });
   const encoded = btoa(unescape(encodeURIComponent(payload)));
-  const url = `https://api.github.com/repos/${GH_SYNC_REPO}/contents/${GH_SYNC_PATH}`;
   const body = { message: 'Sync routes', content: encoded };
   if (syncSHA) body.sha = syncSHA;
   try {
-    const r = await fetch(url, {
+    const r = await fetch(GH_API_URL, {
       method: 'PUT',
       headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -1059,7 +1058,7 @@ async function pushRoutes() {
 }
 
 function saveRoute() {
-  if (!getGHToken() || stops.length < 1) return;
+  if (stops.length < 1) return;
   const needsRT = isRoundTrip();
   const defaultName = needsRT
     ? `Round Trip ~${rtDistanceMiles()} mi`
