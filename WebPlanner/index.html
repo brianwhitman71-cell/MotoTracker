@@ -114,6 +114,10 @@
   .locate-btn { position: absolute; top: 80px; right: 10px; z-index: 500; background: #1a1a1a; border: 1px solid #333; border-radius: 8px; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 16px; color: #ccc; }
   .locate-btn:hover { background: #252525; color: #fff; }
 
+  /* Clear route button (map overlay) */
+  .clear-route-btn { position: absolute; top: 124px; right: 10px; z-index: 500; background: #1e1212; border: 1px solid #442222; border-radius: 8px; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 15px; color: #cc4444; }
+  .clear-route-btn:hover { background: #2a1515; color: #ff5555; }
+
   /* Route preview on map */
   .route-info { position: absolute; bottom: 20px; left: 360px; background: #1a1a1aee; border: 1px solid #333; border-radius: 10px; padding: 12px 16px; font-size: 13px; color: #ccc; z-index: 500; display: none; }
   .route-info b { color: #fff; }
@@ -239,6 +243,7 @@
 
   <div id="map" style="position:relative;">
     <button class="locate-btn" onclick="goToMyLocation()" title="Go to my location">📍</button>
+    <button class="clear-route-btn" onclick="clearRoute()" title="Clear route">✕</button>
     <div class="shaping-banner" id="shaping-banner">✏️ Click anywhere on the map to add a shaping point — drag points to adjust</div>
   </div>
 </div>
@@ -792,6 +797,16 @@ function sendToPhone() {
 
 function closeModal() {
   document.getElementById('qr-modal').classList.remove('open');
+}
+
+function clearRoute() {
+  if (shapingMode) toggleShaping();
+  clearViaPoints();
+  routeCoords = [];
+  if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+  document.getElementById('route-info').style.display = 'none';
+  document.getElementById('shape-btn').style.display = 'none';
+  document.getElementById('send-btn').disabled = true;
 }
 
 function clearAll() {
